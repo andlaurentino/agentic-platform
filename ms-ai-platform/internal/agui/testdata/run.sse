@@ -1,0 +1,32 @@
+data: {"type":"RUN_STARTED","threadId":"thr_test","runId":"run_test"}
+
+data: {"type":"CUSTOM","name":"guardrail.decision","value":{"guardrailId":"core.guardrail.pii-redact","name":"PII redaction","level":"L1","stage":"input","action":"redact","reason":"Redacted pii.email","labels":["pii.email"],"agentId":"agt_router"}}
+
+data: {"type":"STEP_STARTED","stepName":"agt_router"}
+
+data: {"type":"STEP_FINISHED","stepName":"agt_router"}
+
+data: {"type":"STEP_STARTED","stepName":"agt_weather"}
+
+data: {"type":"TOOL_CALL_START","toolCallId":"t1","toolCallName":"get_weather"}
+
+data: {"type":"TOOL_CALL_ARGS","delta":"{\"city\":\"Lisbon\"}","toolCallId":"t1"}
+
+data: {"type":"TOOL_CALL_END","toolCallId":"t1"}
+
+data: {"type":"TOOL_CALL_RESULT","messageId":"msg_sepphzngzxmm","role":"tool","toolCallId":"t1","content":"{\"output\":{\"city\":\"Lisbon\",\"condition\":\"sunny\"}}"}
+
+data: {"type":"TEXT_MESSAGE_START","messageId":"msg_9ujt5hgxgjbj","role":"assistant"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","messageId":"msg_9ujt5hgxgjbj","delta":"It is sunny in Lisbon! I'll em"}
+
+data: {"type":"TEXT_MESSAGE_CONTENT","messageId":"msg_9ujt5hgxgjbj","delta":"ail you at [EMAIL]."}
+
+data: {"type":"CUSTOM","name":"guardrail.decision","value":{"guardrailId":"core.guardrail.pii-redact","name":"PII redaction","level":"L1","stage":"output","action":"redact","reason":"Redacted pii.email","labels":["pii.email"],"agentId":"agt_weather"}}
+
+data: {"type":"TEXT_MESSAGE_END","messageId":"msg_9ujt5hgxgjbj"}
+
+data: {"type":"STEP_FINISHED","stepName":"agt_weather"}
+
+data: {"type":"RUN_FINISHED","threadId":"thr_test","runId":"run_test"}
+
