@@ -7,6 +7,8 @@ export interface JSONSchema {
   title?: string
   description?: string
   enum?: unknown[]
+  /** Labeled choices: [{ const, title }]. Used for model pickers. */
+  oneOf?: { const: unknown; title?: string }[]
   default?: unknown
   properties?: Record<string, JSONSchema>
   items?: JSONSchema
@@ -28,6 +30,14 @@ export interface Manifest {
   configSchema: JSONSchema
   secrets?: { name: string; description?: string }[]
   extra?: {
+    // LLM providers (from llms.yaml)
+    providerType?: "anthropic" | "openai"
+    baseURL?: string
+    apiKeyEnv?: string
+    credentialsConfigured?: boolean
+    models?: { id: string; label?: string; default?: boolean }[]
+    discovery?: { status: "off" | "ok" | "failed"; error?: string; count: number }
+    // guardrails
     level?: "L1" | "L2"
     stages?: string[]
     allowedTools?: string[]

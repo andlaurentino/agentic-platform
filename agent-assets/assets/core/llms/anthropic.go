@@ -1,4 +1,3 @@
-// Package llms holds LLM connector assets.
 package llms
 
 import (
@@ -10,82 +9,25 @@ import (
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go/v2"
-	"github.com/anthropics/anthropic-sdk-go/v2/option"
 	"google.golang.org/adk/model"
 	"google.golang.org/genai"
-
-	"agentic-platform/agent-assets/sdk"
 )
 
-const (
-	ClaudeHaikuID = "core.llm.claude-haiku"
-	// APIKeySecret is read from the environment by the platform.
-	APIKeySecret = "ANTHROPIC_API_KEY"
+// redactedPrefix marks redacted thinking stored in genai.Part.ThoughtSignature.
+const redactedPrefix = "redacted:"
 
-	ModelHaiku55 = "claude-haiku-5-5"
-	ModelHaiku45 = "claude-haiku-4-5"
-
-	redactedPrefix = "redacted:"
-)
-
-// ClaudeConfig is what builders set on an agent that uses Claude Haiku.
-type ClaudeConfig struct {
-	Model     string `json:"model,omitempty" jsonschema:"title=Model,enum=claude-haiku-5-5,enum=claude-haiku-4-5,default=claude-haiku-5-5"`
-	MaxTokens int64  `json:"maxTokens,omitempty" jsonschema:"title=Max output tokens,minimum=256,maximum=64000,default=4096"`
-	Effort    string `json:"effort,omitempty" jsonschema:"title=Effort,enum=low,enum=medium,enum=high,default=low" jsonschema_description:"How much the model thinks before answering. Only used by claude-haiku-5-5."`
+// anthropicModel adapts the Anthropic Messages API to an ADK model.
+type anthropicModel struct {
+	client    anthropic.Client
+	model     string
+	maxTokens int64
+	effort    string // sent as output_config.effort when set
+	apiKeyEnv string // for error messages
 }
 
-var defaultClaudeConfig = ClaudeConfig{Model: ModelHaiku55, MaxTokens: 4096, Effort: "low"}
+func (m *anthropicModel) Name() string { return m.model }
 
-// ClaudeHaiku is the Claude Haiku connector asset.
-type ClaudeHaiku struct{}
-
-func (ClaudeHaiku) Manifest() sdk.Manifest {
-	return sdk.Manifest{
-		ID:           ClaudeHaikuID,
-		Kind:         sdk.KindLLM,
-		Domain:       "core",
-		Name:         "Claude Haiku",
-		Description:  "Anthropic's fastest, lowest-cost Claude models. Good for routing, chat and tool use.",
-		Owner:        "@ai-platform",
-		Tags:         []string{"anthropic", "claude"},
-		Lifecycle:    sdk.LifecycleStable,
-		ConfigSchema: sdk.SchemaFor[ClaudeConfig](),
-		Secrets:      []sdk.SecretRef{{Name: APIKeySecret, Description: "Anthropic API key"}},
-	}
-}
-
-func (ClaudeHaiku) New(_ context.Context, raw json.RawMessage, s sdk.Secrets) (model.LLM, error) {
-	cfg, err := sdk.DecodeConfig(raw, defaultClaudeConfig)
-	if err != nil {
-		return nil, err
-	}
-	key, err := s.Get(APIKeySecret)
-	if err != nil {
-		return nil, err
-	}
-	return NewClaudeModel(anthropic.NewClient(option.WithAPIKey(key)), cfg)
-}
-
-// NewClaudeModel wraps an Anthropic client as an ADK model. Exposed for tests.
-func NewClaudeModel(client anthropic.Client, cfg ClaudeConfig) (model.LLM, error) {
-	if cfg.Model != ModelHaiku55 && cfg.Model != ModelHaiku45 {
-		return nil, fmt.Errorf("unsupported model %q", cfg.Model)
-	}
-	if cfg.MaxTokens <= 0 {
-		cfg.MaxTokens = defaultClaudeConfig.MaxTokens
-	}
-	return &claudeModel{client: client, cfg: cfg}, nil
-}
-
-type claudeModel struct {
-	client anthropic.Client
-	cfg    ClaudeConfig
-}
-
-func (m *claudeModel) Name() string { return m.cfg.Model }
-
-func (m *claudeModel) GenerateContent(ctx context.Context, req *model.LLMRequest, stream bool) iter.Seq2[*model.LLMResponse, error] {
+func (m *anthropicModel) GenerateContent(ctx context.Context, req *model.LLMRequest, stream bool) iter.Seq2[*model.LLMResponse, error] {
 	return func(yield func(*model.LLMResponse, error) bool) {
 		params, err := m.buildParams(req)
 		if err != nil {
@@ -95,7 +37,7 @@ func (m *claudeModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 		if !stream {
 			msg, err := m.client.Messages.New(ctx, params)
 			if err != nil {
-				yield(nil, wrapAPIError(err))
+				yield(nil, wrapAnthropicError(err, m.apiKeyEnv))
 				return
 			}
 			yield(messageToResponse(msg), nil)
@@ -123,7 +65,7 @@ func (m *claudeModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 			}
 		}
 		if err := s.Err(); err != nil {
-			yield(nil, wrapAPIError(err))
+			yield(nil, wrapAnthropicError(err, m.apiKeyEnv))
 			return
 		}
 		resp := messageToResponse(&msg)
@@ -132,18 +74,18 @@ func (m *claudeModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 	}
 }
 
-func (m *claudeModel) buildParams(req *model.LLMRequest) (anthropic.MessageNewParams, error) {
+func (m *anthropicModel) buildParams(req *model.LLMRequest) (anthropic.MessageNewParams, error) {
 	msgs, err := contentsToMessages(req.Contents)
 	if err != nil {
 		return anthropic.MessageNewParams{}, err
 	}
 	params := anthropic.MessageNewParams{
-		Model:     anthropic.Model(m.cfg.Model),
-		MaxTokens: m.cfg.MaxTokens,
+		Model:     anthropic.Model(m.model),
+		MaxTokens: m.maxTokens,
 		Messages:  msgs,
 	}
-	if m.cfg.Model == ModelHaiku55 && m.cfg.Effort != "" {
-		params.OutputConfig = anthropic.OutputConfigParam{Effort: anthropic.OutputConfigEffort(m.cfg.Effort)}
+	if m.effort != "" {
+		params.OutputConfig = anthropic.OutputConfigParam{Effort: anthropic.OutputConfigEffort(m.effort)}
 	}
 	if req.Config != nil {
 		if sys := contentText(req.Config.SystemInstruction); sys != "" {
@@ -278,72 +220,6 @@ func toolsToParams(tools []*genai.Tool) ([]anthropic.ToolUnionParam, error) {
 	return out, nil
 }
 
-// declarationSchema returns the tool's input JSON Schema as a generic map.
-func declarationSchema(fd *genai.FunctionDeclaration) (map[string]any, error) {
-	var src any = map[string]any{"type": "object"}
-	switch {
-	case fd.ParametersJsonSchema != nil:
-		src = fd.ParametersJsonSchema
-	case fd.Parameters != nil:
-		src = genaiSchemaToJSON(fd.Parameters)
-	}
-	b, err := json.Marshal(src)
-	if err != nil {
-		return nil, err
-	}
-	var m map[string]any
-	if err := json.Unmarshal(b, &m); err != nil {
-		return nil, err
-	}
-	return m, nil
-}
-
-// genaiSchemaToJSON converts the OpenAPI-style genai.Schema to JSON Schema.
-func genaiSchemaToJSON(s *genai.Schema) map[string]any {
-	if s == nil {
-		return nil
-	}
-	m := map[string]any{}
-	if s.Type != "" {
-		t := strings.ToLower(string(s.Type))
-		if s.Nullable != nil && *s.Nullable {
-			m["type"] = []string{t, "null"}
-		} else {
-			m["type"] = t
-		}
-	}
-	if s.Description != "" {
-		m["description"] = s.Description
-	}
-	if s.Format != "" {
-		m["format"] = s.Format
-	}
-	if len(s.Enum) > 0 {
-		m["enum"] = s.Enum
-	}
-	if len(s.Required) > 0 {
-		m["required"] = s.Required
-	}
-	if len(s.Properties) > 0 {
-		props := map[string]any{}
-		for k, v := range s.Properties {
-			props[k] = genaiSchemaToJSON(v)
-		}
-		m["properties"] = props
-	}
-	if s.Items != nil {
-		m["items"] = genaiSchemaToJSON(s.Items)
-	}
-	if len(s.AnyOf) > 0 {
-		var anyOf []any
-		for _, v := range s.AnyOf {
-			anyOf = append(anyOf, genaiSchemaToJSON(v))
-		}
-		m["anyOf"] = anyOf
-	}
-	return m
-}
-
 func messageToResponse(msg *anthropic.Message) *model.LLMResponse {
 	content := &genai.Content{Role: genai.RoleModel}
 	for _, block := range msg.Content {
@@ -400,25 +276,12 @@ func hasVisibleText(c *genai.Content) bool {
 	return false
 }
 
-func contentText(c *genai.Content) string {
-	if c == nil {
-		return ""
-	}
-	var parts []string
-	for _, p := range c.Parts {
-		if p != nil && p.Text != "" && !p.Thought {
-			parts = append(parts, p.Text)
-		}
-	}
-	return strings.Join(parts, "\n\n")
-}
-
-func wrapAPIError(err error) error {
+func wrapAnthropicError(err error, apiKeyEnv string) error {
 	var apiErr *anthropic.Error
 	if errors.As(err, &apiErr) {
 		switch apiErr.StatusCode {
 		case 401, 403:
-			return fmt.Errorf("claude: %s is missing or invalid: %w", APIKeySecret, err)
+			return fmt.Errorf("claude: %s is missing or invalid: %w", apiKeyEnv, err)
 		case 429:
 			return fmt.Errorf("claude: rate limited, try again shortly: %w", err)
 		}

@@ -19,6 +19,22 @@ type LLM interface {
 	New(ctx context.Context, cfg json.RawMessage, s Secrets) (model.LLM, error)
 }
 
+// ModelInfo describes one model an LLM provider offers.
+type ModelInfo struct {
+	ID      string `json:"id"`
+	Label   string `json:"label,omitempty"`
+	Default bool   `json:"default,omitempty"`
+}
+
+// ModelProvider is an LLM asset that offers several models, selected with the
+// "model" config field. ProviderKey is used in model references
+// ("<provider>:<model>") such as a guardrail's classifier model.
+type ModelProvider interface {
+	LLM
+	ProviderKey() string
+	Models() []ModelInfo
+}
+
 // Tool is a native Go function exposed to agents as an ADK tool.
 type Tool interface {
 	Asset

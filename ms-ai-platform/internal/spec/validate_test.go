@@ -1,11 +1,13 @@
 package spec
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
 
 	"agentic-platform/agent-assets/assets"
+	"agentic-platform/agent-assets/llmconfig"
 )
 
 func valid() Orchestration {
@@ -88,3 +90,20 @@ func TestRuntimeName(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+func TestProviderWithoutModels(t *testing.T) {
+	cfg, err := llmconfig.Parse([]byte("providers:\n  gw:\n    type: openai\n    baseURL: http://127.0.0.1:1/v1\n    auth: none\n    discover: {}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Discovery fails (nothing listens on port 1) and no models are configured.
+	v := NewValidator(assets.New(context.Background(), assets.WithLLMConfig(cfg), assets.WithDiscovery(true)))
+	o := valid()
+	o.Agents[0].Model = AssetRef{Asset: "core.llm.gw"}
+	o.Agents[1].Model = AssetRef{Asset: "core.llm.gw"}
+	o.Agents[2].Model = AssetRef{Asset: "core.llm.gw"}
+	ps := v.Validate(&o, nil)
+	if !HasErrors(ps) || !strings.Contains(ps[0].Message, "no models available") {
+		t.Fatalf("got %+v", ps)
+	}
+}

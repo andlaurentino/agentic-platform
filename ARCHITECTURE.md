@@ -180,7 +180,7 @@ type GuardResult struct {
 
 | Kind | Purpose | Notes |
 |---|---|---|
-| **llms** | Connects to an LLM provider (Gemini, Claude, OpenAI, self-hosted). Returns an ADK `model.LLM`. | Config: model name, temperature, max tokens, region. Credentials come from secrets. |
+| **llms** | One asset per provider declared in `config/llms.yaml` (embedded; `LLM_CONFIG_PATH` overrides it per deployment). Two protocols: Anthropic Messages and OpenAI Chat Completions, so any OpenAI-compatible LLM gateway works. Returns an ADK `model.LLM`. | Builders pick a provider, then a model from its list (configured, or discovered from the gateway's `/models` with include/exclude filters). The key comes from the env var named in `apiKeyEnv`; header values can use `${VAR}`. |
 | **tools** | Native Go functions exposed to agents as ADK tools. | Input/output are typed structs, and the LLM-facing schema is generated from them. Must declare side effects (`read` / `write`) so writes can require confirmation. |
 | **mcps** | The contract for an MCP server: transport (streamable HTTP / SSE), URL per environment, auth mode (none, static token, OAuth2 client credentials, mTLS), and an **allow-list** of tools. | The platform discovers tools through `tools/list` and filters them with the allow-list. Builders choose tools from that filtered list. |
 | **guardrails** | Policy checks that run around model and tool calls. | **L1**: deterministic and fast (regex, keyword lists, PII patterns, length limits, schema validation). Redact or block. **L2**: model-based (prompt-injection and jailbreak detection, topic/off-scope classification, toxicity, grounding checks). Has its own LLM instance and higher latency. |

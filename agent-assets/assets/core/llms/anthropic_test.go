@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/anthropics/anthropic-sdk-go/v2"
-	"github.com/anthropics/anthropic-sdk-go/v2/option"
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/agent/llmagent"
 	"google.golang.org/adk/runner"
@@ -17,7 +16,20 @@ import (
 	"google.golang.org/genai"
 
 	"agentic-platform/agent-assets/assets/core/llms/claudetest"
+	"agentic-platform/agent-assets/llmconfig"
 )
+
+type mapSecrets map[string]string
+
+func (m mapSecrets) Get(name string) (string, error) { return m[name], nil }
+
+// haikuProvider is the embedded claude-haiku provider pointed at baseURL.
+func haikuProvider(t *testing.T, baseURL string) *Provider {
+	t.Helper()
+	cfg := llmconfig.Default().Providers["claude-haiku"]
+	cfg.BaseURL = baseURL
+	return NewProvider(context.Background(), cfg, false)
+}
 
 func roles(t *testing.T, msgs []anthropic.MessageParam) []string {
 	t.Helper()
@@ -99,7 +111,7 @@ func TestRunnerTransferToolAndThinkingRoundTrip(t *testing.T) {
 	)
 	defer srv.Close()
 
-	llm, err := NewClaudeModel(anthropic.NewClient(option.WithAPIKey("test"), option.WithBaseURL(srv.URL)), defaultClaudeConfig)
+	llm, err := haikuProvider(t, srv.URL).New(context.Background(), nil, mapSecrets{"ANTHROPIC_API_KEY": "test"})
 	if err != nil {
 		t.Fatal(err)
 	}

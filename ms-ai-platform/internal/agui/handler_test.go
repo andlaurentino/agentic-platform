@@ -18,6 +18,8 @@ import (
 
 	"agentic-platform/agent-assets/assets"
 	"agentic-platform/agent-assets/assets/core/llms/claudetest"
+	"agentic-platform/agent-assets/assets/core/llms/openaitest"
+	"agentic-platform/agent-assets/llmconfig"
 	"agentic-platform/ms-ai-platform/internal/catalog"
 	"agentic-platform/ms-ai-platform/internal/compiler"
 	"agentic-platform/ms-ai-platform/internal/secrets"
@@ -71,7 +73,10 @@ func testSpec() spec.Orchestration {
 }
 
 func newHandler(o spec.Orchestration) *Handler {
-	registry := assets.All()
+	return newHandlerWith(assets.All(), o)
+}
+
+func newHandlerWith(registry *assets.Catalog, o spec.Orchestration) *Handler {
 	return &Handler{
 		Source:   fakeSource{draft: store.Draft{Spec: o, Version: 1}},
 		Compiler: &compiler.Compiler{Catalog: catalog.New(registry, secrets.Env{}), Validator: spec.NewValidator(registry)},
@@ -274,5 +279,66 @@ func TestRunMissingAPIKey(t *testing.T) {
 	last := events[len(events)-1]
 	if last.Type != RunError || !strings.Contains(last.Message, "ANTHROPIC_API_KEY") {
 		t.Fatalf("got %s / %q", types(events), last.Message)
+	}
+}
+
+// One orchestration, two protocols: the router runs on Claude (Anthropic API)
+// and hands off to an agent on an OpenAI-compatible gateway that calls an MCP tool.
+func TestRunMixedProviders(t *testing.T) {
+	claude := claudetest.New(
+		claudetest.Turn{Blocks: []claudetest.Block{claudetest.ToolUse("t0", "transfer_to_agent", map[string]any{"agent_name": "weather"})}},
+	)
+	defer claude.Close()
+	gw := openaitest.New(nil,
+		openaitest.Turn{ToolCalls: []openaitest.ToolCall{{ID: "call_1", Name: "get_weather", Args: map[string]any{"city": "Lisbon"}}}},
+		openaitest.Turn{Text: "Sunny in Lisbon."},
+	)
+	defer gw.Close()
+	mcpSrv := weatherMCP(t)
+	defer mcpSrv.Close()
+	setEnv(t, claude.URL, mcpSrv.URL)
+	t.Setenv("GW_KEY", "gw-key")
+
+	cfg, err := llmconfig.Parse([]byte(`
+defaults: { guardrailModel: "claude-haiku:claude-haiku-5-5" }
+providers:
+  claude-haiku:
+    type: anthropic
+    apiKeyEnv: ANTHROPIC_API_KEY
+    models: [{ id: claude-haiku-5-5, default: true, effort: true }]
+  gw:
+    name: Gateway
+    type: openai
+    baseURL: ` + gw.URL + `/v1
+    apiKeyEnv: GW_KEY
+    models: [{ id: gpt-test, default: true }]
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := testSpec()
+	o.Agents[1].Model = spec.AssetRef{Asset: "core.llm.gw", Config: json.RawMessage(`{"model":"gpt-test"}`)}
+	_, events := run(t, newHandlerWith(assets.New(context.Background(), assets.WithLLMConfig(cfg)), o), "Weather in Lisbon?")
+
+	want := strings.Join([]string{
+		"RUN_STARTED",
+		"STEP_STARTED:agt_router", "STEP_FINISHED:agt_router", "STEP_STARTED:agt_weather",
+		"TOOL_CALL_START:get_weather", "TOOL_CALL_ARGS", "TOOL_CALL_END", "TOOL_CALL_RESULT",
+		"TEXT_MESSAGE_START", "TEXT_MESSAGE_CONTENT", "TEXT_MESSAGE_CONTENT", "TEXT_MESSAGE_END",
+		"STEP_FINISHED:agt_weather", "RUN_FINISHED",
+	}, "\n")
+	if got := types(events); got != want {
+		t.Fatalf("event sequence:\n%s\n\nwant:\n%s", got, want)
+	}
+	if n := len(claude.Requests()); n != 1 {
+		t.Errorf("claude requests = %d, want 1 (router only)", n)
+	}
+	reqs := gw.Requests()
+	if len(reqs) != 2 {
+		t.Fatalf("gateway requests = %d, want 2", len(reqs))
+	}
+	b, _ := json.Marshal(reqs[1]["messages"])
+	if !strings.Contains(string(b), `"role":"tool"`) || !strings.Contains(string(b), "sunny") {
+		t.Errorf("gateway did not receive the MCP tool result: %s", b)
 	}
 }

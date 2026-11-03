@@ -281,7 +281,14 @@ export function AgentInspector({ agentId }: { agentId: string }) {
 
       <Separator />
       <Section title="Model">
-        <Select value={agent.model.asset} onValueChange={(asset) => editAgent(agent.id, (a) => void (a.model = { asset }))}>
+        <Select
+          value={agent.model.asset}
+          onValueChange={(asset) => {
+            // Switching provider resets settings and picks that provider's default model.
+            const def = llms?.find((m) => m.id === asset)?.extra?.models?.find((m) => m.default)?.id
+            editAgent(agent.id, (a) => void (a.model = def ? { asset, config: { model: def } } : { asset }))
+          }}
+        >
           <SelectTrigger className="w-full">
             <SelectValue placeholder="Choose a model" />
           </SelectTrigger>
@@ -289,10 +296,16 @@ export function AgentInspector({ agentId }: { agentId: string }) {
             {llms?.map((m) => (
               <SelectItem key={m.id} value={m.id}>
                 {m.name}
+                {m.extra?.providerType === "openai" ? " (OpenAI-compatible)" : ""}
               </SelectItem>
             ))}
           </SelectContent>
         </Select>
+        {llm && llm.extra?.credentialsConfigured === false && (
+          <p className="text-xs text-destructive">
+            {llm.extra.apiKeyEnv} is not set on the server, so runs with this provider will fail.
+          </p>
+        )}
         {llm && (
           <SchemaForm
             idPrefix={`${agent.id}-model`}

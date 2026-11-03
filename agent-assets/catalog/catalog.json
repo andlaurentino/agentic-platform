@@ -50,7 +50,7 @@
     "kind": "guardrail",
     "domain": "core",
     "name": "Prompt injection detection",
-    "description": "Blocks user messages that try to override instructions or extract the system prompt. Uses Claude Haiku as a classifier.",
+    "description": "Blocks user messages that try to override instructions or extract the system prompt. Uses a small LLM as a classifier.",
     "owner": "@ai-platform",
     "tags": [
       "security"
@@ -59,13 +59,20 @@
     "configSchema": {
       "properties": {
         "model": {
-          "type": "string",
-          "enum": [
-            "claude-haiku-5-5",
-            "claude-haiku-4-5"
+          "oneOf": [
+            {
+              "const": "claude-haiku:claude-haiku-5-5",
+              "title": "Claude Haiku · Claude Haiku 5.5"
+            },
+            {
+              "const": "claude-haiku:claude-haiku-4-5",
+              "title": "Claude Haiku · Claude Haiku 4.5"
+            }
           ],
+          "type": "string",
           "title": "Classifier model",
-          "default": "claude-haiku-5-5"
+          "description": "Leave empty to use the platform default (claude-haiku:claude-haiku-5-5).",
+          "x-llm-model": true
         },
         "failMode": {
           "type": "string",
@@ -103,25 +110,30 @@
     "description": "Anthropic's fastest, lowest-cost Claude models. Good for routing, chat and tool use.",
     "owner": "@ai-platform",
     "tags": [
-      "anthropic",
-      "claude"
+      "anthropic"
     ],
     "lifecycle": "stable",
     "configSchema": {
       "properties": {
         "model": {
-          "type": "string",
-          "enum": [
-            "claude-haiku-5-5",
-            "claude-haiku-4-5"
+          "oneOf": [
+            {
+              "const": "claude-haiku-5-5",
+              "title": "Claude Haiku 5.5"
+            },
+            {
+              "const": "claude-haiku-4-5",
+              "title": "Claude Haiku 4.5"
+            }
           ],
+          "type": "string",
           "title": "Model",
           "default": "claude-haiku-5-5"
         },
         "maxTokens": {
           "type": "integer",
-          "maximum": 64000,
-          "minimum": 256,
+          "maximum": 128000,
+          "minimum": 1,
           "title": "Max output tokens",
           "default": 4096
         },
@@ -133,7 +145,7 @@
             "high"
           ],
           "title": "Effort",
-          "description": "How much the model thinks before answering. Only used by claude-haiku-5-5.",
+          "description": "How much the model thinks before answering. Only used by models that support it.",
           "default": "low"
         }
       },
@@ -143,9 +155,30 @@
     "secrets": [
       {
         "name": "ANTHROPIC_API_KEY",
-        "description": "Anthropic API key"
+        "description": "Claude Haiku API key"
       }
-    ]
+    ],
+    "extra": {
+      "apiKeyEnv": "ANTHROPIC_API_KEY",
+      "baseURL": "",
+      "credentialsConfigured": true,
+      "discovery": {
+        "status": "off",
+        "count": 2
+      },
+      "models": [
+        {
+          "id": "claude-haiku-5-5",
+          "label": "Claude Haiku 5.5",
+          "default": true
+        },
+        {
+          "id": "claude-haiku-4-5",
+          "label": "Claude Haiku 4.5"
+        }
+      ],
+      "providerType": "anthropic"
+    }
   },
   {
     "id": "core.mcp.demo",

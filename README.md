@@ -32,7 +32,47 @@ curl -N -X POST "localhost:8080/v1/orchestrations/<id>/agui?target=draft" \
   -d '{"threadId":"t1","runId":"r1","messages":[{"id":"m1","role":"user","content":"Weather in Lisbon?"}]}'
 ```
 
-`ANTHROPIC_BASE_URL` points the Claude asset at another endpoint (for example a local fake) if you need to run without credits.
+`ANTHROPIC_BASE_URL` points Anthropic providers that don't set `baseURL` at another endpoint (for example a local fake) if you need to run without credits.
+
+## Configuring LLMs
+
+LLM providers live in [`agent-assets/config/llms.yaml`](agent-assets/config/llms.yaml). The file is embedded in the API binary and reviewed like any other asset change. A deployment can use its own file with `LLM_CONFIG_PATH=/path/to/llms.yaml`.
+
+Each provider becomes one LLM in the catalog (`<domain>.llm.<key>`). Builders pick a provider for an agent, then a model from its list.
+
+```yaml
+defaults:
+  guardrailModel: claude-haiku:claude-haiku-5-5   # "<provider>:<model>" used by L2 guardrails
+
+providers:
+  claude-haiku:
+    type: anthropic                    # Anthropic Messages API
+    apiKeyEnv: ANTHROPIC_API_KEY       # name of the env var, never the key itself
+    models:
+      - { id: claude-haiku-5-5, label: Claude Haiku 5.5, default: true, effort: true }
+      - { id: claude-haiku-4-5, label: Claude Haiku 4.5 }
+    params: { maxTokens: 4096, effort: low }
+
+  llm-gateway:
+    name: LLM Gateway
+    type: openai                       # OpenAI Chat Completions: OpenAI, LiteLLM, Portkey, vLLM, ...
+    baseURL: https://llm-gateway.internal/v1
+    apiKeyEnv: LLM_GATEWAY_API_KEY     # or `auth: none`
+    headers: { X-Team: "${TEAM_ID}" }  # ${VAR} is read from the environment when connecting
+    discover:                          # list models from GET {baseURL}/models at startup
+      include: ["gpt-4.1*", "claude-*"]
+      exclude: ["*embedding*"]
+    models:                            # optional: labels and the default; used if discovery fails
+      - { id: gpt-4.1-mini, label: GPT-4.1 mini, default: true }
+    params: { maxTokens: 4096 }
+    # streamUsage: false               # for gateways that reject stream_options
+```
+
+- Unknown fields are errors, so an `apiKey:` with a literal key is rejected.
+- Discovery runs at startup; restart the API to pick up new gateway models. If it fails, the API still starts with the listed models and the LLMs page shows the error.
+- OpenAI-compatible requests send `max_completion_tokens`.
+- Check a file before deploying: `go run ./agent-assets/cmd/cli llms --llm-config my-llms.yaml --discover` (or `validate`).
+- `GET /healthz` reports each provider's credentials, model count and discovery result.
 
 ## Tests
 
@@ -54,7 +94,7 @@ Notable tests:
 
 ## Slice 0 scope
 
-In: Claude Haiku (`claude-haiku-5-5`, `claude-haiku-4-5`) via `ANTHROPIC_API_KEY`; one shared draft per orchestration with `If-Match`/409; `llm` agents with hand-off (sub-agent) and call-as-tool edges; AG-UI events `RUN_*`, `STEP_*`, `TEXT_MESSAGE_*`, `TOOL_CALL_*`, `CUSTOM guardrail.decision` / `message.final`.
+In: LLM providers from `llms.yaml` (Anthropic and OpenAI-compatible gateways, with model discovery); one shared draft per orchestration with `If-Match`/409; `llm` agents with hand-off (sub-agent) and call-as-tool edges; AG-UI events `RUN_*`, `STEP_*`, `TEXT_MESSAGE_*`, `TOOL_CALL_*`, `CUSTOM guardrail.decision` / `message.final`.
 
 Not yet: authentication (run it on the internal network only), publish/revisions/releases, workflow agents (sequential/parallel/loop), human-in-the-loop confirmations, persistent sessions (chat history lives in API memory and is lost on restart), traces, OpenAPI-generated clients, drag-and-drop from the sidebar onto nodes.
 

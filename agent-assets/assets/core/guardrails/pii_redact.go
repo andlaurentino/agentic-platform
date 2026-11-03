@@ -56,7 +56,7 @@ func (PIIRedact) Manifest() sdk.Manifest {
 }
 
 func (PIIRedact) Level() sdk.GuardrailLevel { return sdk.L1 }
-func (PIIRedact) Stages() []sdk.Stage     { return []sdk.Stage{sdk.StageInput, sdk.StageOutput} }
+func (PIIRedact) Stages() []sdk.Stage       { return []sdk.Stage{sdk.StageInput, sdk.StageOutput} }
 
 func (PIIRedact) New(_ context.Context, raw json.RawMessage, _ sdk.Deps) (sdk.Check, error) {
 	cfg, err := sdk.DecodeConfig(raw, PIIConfig{Entities: piiOrder})

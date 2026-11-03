@@ -55,8 +55,9 @@ type Check func(ctx context.Context, in GuardInput) (GuardResult, error)
 // Deps are platform services a guardrail may use.
 type Deps struct {
 	Secrets Secrets
-	// LLM returns a model for L2 guardrails. modelID is a model name the LLM asset accepts.
-	LLM func(ctx context.Context, modelID string) (model.LLM, error)
+	// LLM returns a model for L2 guardrails. ref is "<provider>:<model>" from
+	// llms.yaml; empty means the platform default.
+	LLM func(ctx context.Context, ref string) (model.LLM, error)
 }
 
 // Guardrail is a policy check that runs around model and tool calls.

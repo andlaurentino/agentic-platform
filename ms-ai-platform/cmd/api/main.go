@@ -14,7 +14,7 @@ import (
 	"google.golang.org/adk/session"
 
 	"agentic-platform/agent-assets/assets"
-	"agentic-platform/agent-assets/assets/core/llms"
+	"agentic-platform/agent-assets/llmconfig"
 	"agentic-platform/ms-ai-platform/internal/agui"
 	"agentic-platform/ms-ai-platform/internal/catalog"
 	"agentic-platform/ms-ai-platform/internal/compiler"
@@ -44,11 +44,22 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	registry := assets.All()
+	llmCfg, err := llmconfig.Load(os.Getenv("LLM_CONFIG_PATH"))
+	if err != nil {
+		return err
+	}
+	registry := assets.New(ctx, assets.WithLLMConfig(llmCfg), assets.WithDiscovery(true))
 	if err := registry.Validate(); err != nil {
 		return err
 	}
 	cat := catalog.New(registry, secrets.Env{})
+	for _, p := range cat.Providers() {
+		log := slog.Info
+		if !p.CredentialsConfigured || p.Models == 0 {
+			log = slog.Warn
+		}
+		log("LLM provider", "id", p.ID, "type", p.Type, "models", p.Models, "credentials", p.CredentialsConfigured, "discovery", p.Discovery)
+	}
 
 	st, err := store.Open(ctx, env("DATABASE_URL", "postgres://postgres:postgres@localhost:5433/agentic?sslmode=disable"))
 	if err != nil {
@@ -57,9 +68,6 @@ func run() error {
 	defer st.Close()
 	if err := st.SyncCatalog(ctx, registry.Manifests("")); err != nil {
 		return err
-	}
-	if os.Getenv(llms.APIKeySecret) == "" {
-		slog.Warn(llms.APIKeySecret + " is not set; agent runs will fail until it is")
 	}
 
 	validator := spec.NewValidator(registry)
@@ -81,8 +89,8 @@ func run() error {
 		httpx.WriteJSON(w, status, map[string]any{
 			"status":       map[bool]string{true: "ok", false: "degraded"}[dbOK],
 			"database":     dbOK,
-			"anthropicKey": os.Getenv(llms.APIKeySecret) != "",
 			"assets":       len(registry.Manifests("")),
+			"llmProviders": cat.Providers(),
 		})
 	})
 

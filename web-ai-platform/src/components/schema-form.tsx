@@ -1,10 +1,10 @@
 // Renders a form for an asset's config from its JSON Schema, so new assets
 // appear in the UI without frontend changes. Supports the subset of JSON
 // Schema our assets use: string/number/integer/boolean, enums, and arrays of enums.
+import { OptionPicker } from "@/components/option-picker"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import type { Config, JSONSchema } from "@/api/types"
 
@@ -46,21 +46,19 @@ export function SchemaForm({
         let field
         if (type === "boolean") {
           field = <Switch id={id} checked={(v ?? def ?? false) as boolean} onCheckedChange={(c) => set(key, c)} />
-        } else if (prop.enum) {
+        } else if (prop.oneOf || prop.enum) {
+          const options = prop.oneOf
+            ? prop.oneOf.map((o) => ({ value: String(o.const), label: o.title ?? String(o.const) }))
+            : prop.enum!.map((o) => ({ value: String(o), label: String(o) }))
           field = (
-            <Select value={String(v ?? def ?? "")} onValueChange={(nv) => set(key, nv)}>
-              <SelectTrigger id={id} className="w-full">
-                <SelectValue placeholder="Choose…" />
-              </SelectTrigger>
-              <SelectContent>
-                {prop.enum.map((opt) => (
-                  <SelectItem key={String(opt)} value={String(opt)}>
-                    {String(opt)}
-                    {opt === def ? " (default)" : ""}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <OptionPicker
+              id={id}
+              options={options}
+              value={v === undefined ? undefined : String(v)}
+              defaultValue={def === undefined ? undefined : String(def)}
+              onChange={(nv) => set(key, nv)}
+              placeholder={def === undefined && prop.oneOf ? "Platform default" : "Choose…"}
+            />
           )
         } else if (type === "array" && prop.items?.enum) {
           const selected = (v ?? def ?? []) as unknown[]

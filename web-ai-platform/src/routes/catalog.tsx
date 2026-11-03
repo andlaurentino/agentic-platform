@@ -11,7 +11,7 @@ const titles: Record<Kind, { title: string; description: string }> = {
   tool: { title: "Tools", description: "Native functions engineers registered in agent-assets." },
   mcp: { title: "MCP servers", description: "MCP server contracts and the tools agents are allowed to use." },
   guardrail: { title: "Guardrails", description: "Policy checks that run around model calls. L1 is rule-based, L2 is model-based." },
-  llm: { title: "LLMs", description: "Model connectors available to agents." },
+  llm: { title: "LLMs", description: "LLM providers from llms.yaml. Each agent picks a provider, then one of its models." },
 }
 
 export function LifecycleBadge({ lifecycle }: { lifecycle: Manifest["lifecycle"] }) {
@@ -37,6 +37,58 @@ function McpTools({ id }: { id: string }) {
         </li>
       ))}
     </ul>
+  )
+}
+
+function ProviderDetails({ m }: { m: Manifest }) {
+  const x = m.extra ?? {}
+  const models = x.models ?? []
+  return (
+    <div className="grid gap-2 text-xs">
+      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+        <dt className="text-muted-foreground">Protocol</dt>
+        <dd>{x.providerType === "openai" ? "OpenAI-compatible (Chat Completions)" : "Anthropic Messages"}</dd>
+        {x.baseURL && (
+          <>
+            <dt className="text-muted-foreground">Endpoint</dt>
+            <dd className="font-mono break-all">{x.baseURL}</dd>
+          </>
+        )}
+        {x.apiKeyEnv && (
+          <>
+            <dt className="text-muted-foreground">API key</dt>
+            <dd className="flex items-center gap-1.5">
+              <code className="font-mono">{x.apiKeyEnv}</code>
+              {x.credentialsConfigured ? <Badge variant="secondary">set</Badge> : <Badge variant="destructive">not set</Badge>}
+            </dd>
+          </>
+        )}
+        {x.discovery && x.discovery.status !== "off" && (
+          <>
+            <dt className="text-muted-foreground">Discovery</dt>
+            <dd className={x.discovery.status === "failed" ? "text-destructive" : undefined}>
+              {x.discovery.status === "ok" ? `${x.discovery.count} models found` : `failed: ${x.discovery.error}`}
+            </dd>
+          </>
+        )}
+      </dl>
+      <div>
+        <p className="mb-1 font-medium">Models</p>
+        {models.length === 0 ? (
+          <p className="flex items-center gap-1.5 text-destructive">
+            <AlertCircle className="size-3.5" /> No models available
+          </p>
+        ) : (
+          <div className="flex max-h-40 flex-wrap gap-1 overflow-y-auto">
+            {models.map((mo) => (
+              <Badge key={mo.id} variant={mo.default ? "default" : "outline"} title={mo.id}>
+                {mo.label || mo.id}
+              </Badge>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
   )
 }
 
@@ -75,7 +127,8 @@ function AssetCard({ m }: { m: Manifest }) {
             </>
           )}
         </dl>
-        {m.secrets && m.secrets.length > 0 && (
+        {m.kind === "llm" && <ProviderDetails m={m} />}
+        {m.kind !== "llm" && m.secrets && m.secrets.length > 0 && (
           <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <KeyRound className="size-3.5" /> Needs secret {m.secrets.map((s) => s.name).join(", ")}
           </p>
@@ -88,6 +141,7 @@ function AssetCard({ m }: { m: Manifest }) {
                 <li key={k}>
                   {p.title ?? k}
                   {p.enum && `: ${p.enum.join(" / ")}`}
+                  {p.oneOf && `: ${p.oneOf.length} options`}
                   {p.default !== undefined && !Array.isArray(p.default) && ` (default ${String(p.default)})`}
                 </li>
               ))}

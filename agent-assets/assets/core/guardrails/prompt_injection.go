@@ -17,7 +17,8 @@ import (
 const PromptInjectionID = "core.guardrail.prompt-injection"
 
 type PromptInjectionConfig struct {
-	Model     string `json:"model,omitempty" jsonschema:"title=Classifier model,enum=claude-haiku-5-5,enum=claude-haiku-4-5,default=claude-haiku-5-5"`
+	// Model is a "<provider>:<model>" reference; the platform fills the choices from llms.yaml.
+	Model     string `json:"model,omitempty" jsonschema:"title=Classifier model" jsonschema_extras:"x-llm-model=true"`
 	FailMode  string `json:"failMode,omitempty" jsonschema:"title=When the classifier fails,enum=closed,enum=open,default=closed" jsonschema_description:"closed blocks the message, open lets it through."`
 	TimeoutMs int    `json:"timeoutMs,omitempty" jsonschema:"title=Timeout (ms),minimum=500,maximum=10000,default=3000"`
 }
@@ -37,7 +38,7 @@ func (PromptInjection) Manifest() sdk.Manifest {
 		Kind:         sdk.KindGuardrail,
 		Domain:       "core",
 		Name:         "Prompt injection detection",
-		Description:  "Blocks user messages that try to override instructions or extract the system prompt. Uses Claude Haiku as a classifier.",
+		Description:  "Blocks user messages that try to override instructions or extract the system prompt. Uses a small LLM as a classifier.",
 		Owner:        "@ai-platform",
 		Tags:         []string{"security"},
 		Lifecycle:    sdk.LifecycleExperimental,
@@ -47,10 +48,11 @@ func (PromptInjection) Manifest() sdk.Manifest {
 }
 
 func (PromptInjection) Level() sdk.GuardrailLevel { return sdk.L2 }
-func (PromptInjection) Stages() []sdk.Stage     { return []sdk.Stage{sdk.StageInput} }
+func (PromptInjection) Stages() []sdk.Stage       { return []sdk.Stage{sdk.StageInput} }
 
 func (PromptInjection) New(ctx context.Context, raw json.RawMessage, deps sdk.Deps) (sdk.Check, error) {
-	cfg, err := sdk.DecodeConfig(raw, PromptInjectionConfig{Model: "claude-haiku-5-5", FailMode: "closed", TimeoutMs: 3000})
+	// An empty model means the platform default (defaults.guardrailModel in llms.yaml).
+	cfg, err := sdk.DecodeConfig(raw, PromptInjectionConfig{FailMode: "closed", TimeoutMs: 3000})
 	if err != nil {
 		return nil, err
 	}

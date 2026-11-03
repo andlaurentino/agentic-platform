@@ -18,6 +18,8 @@ import (
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
 	"google.golang.org/genai"
+
+	"agentic-platform/agent-assets/llmconfig"
 )
 
 type envSecrets struct{}
@@ -25,11 +27,11 @@ type envSecrets struct{}
 func (envSecrets) Get(name string) (string, error) { return os.Getenv(name), nil }
 
 func TestLiveAgentWithToolStreaming(t *testing.T) {
-	if os.Getenv(APIKeySecret) == "" {
+	if os.Getenv("ANTHROPIC_API_KEY") == "" {
 		t.Skip("ANTHROPIC_API_KEY not set")
 	}
 	ctx := context.Background()
-	llm, err := ClaudeHaiku{}.New(ctx, nil, envSecrets{})
+	llm, err := NewProvider(ctx, llmconfig.Default().Providers["claude-haiku"], false).New(ctx, nil, envSecrets{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -217,6 +217,12 @@ func (v *Validator) checkAsset(ps *[]Problem, path, agentID string, ref AssetRef
 		add(fmt.Sprintf("asset %q is a %s, expected a %s", ref.Asset, m.Kind, kind))
 		return m, false
 	}
+	if kind == sdk.KindLLM {
+		if models, ok := m.Extra["models"].([]sdk.ModelInfo); ok && len(models) == 0 {
+			add(fmt.Sprintf("%s has no models available; check its llms.yaml entry or model discovery", m.Name))
+			return m, false
+		}
+	}
 	if m.Lifecycle == sdk.LifecycleDeprecated {
 		*ps = append(*ps, Problem{Path: path, AgentID: agentID, Message: fmt.Sprintf("%s is deprecated", m.Name), Severity: SeverityWarning})
 	}
