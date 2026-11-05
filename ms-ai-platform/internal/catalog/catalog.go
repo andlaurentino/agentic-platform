@@ -9,63 +9,61 @@ import (
 
 	"google.golang.org/adk/model"
 
-	"agentic-platform/agent-assets/assets"
-	"agentic-platform/agent-assets/sdk"
+	"agentic-platform/lib-agent-assets/pkg/assets"
+	"agentic-platform/lib-agent-assets/pkg/registry"
 	"agentic-platform/ms-ai-platform/internal/httpx"
+	"agentic-platform/ms-ai-platform/internal/llmproviders"
 	"agentic-platform/ms-ai-platform/internal/mcpclient"
 )
 
 // Catalog wraps the asset registry with platform services.
 type Catalog struct {
-	*assets.Catalog
-	Secrets sdk.Secrets
+	*registry.Registry
+	Secrets assets.Secrets
 }
 
-func New(c *assets.Catalog, s sdk.Secrets) *Catalog {
-	return &Catalog{Catalog: c, Secrets: s}
+func New(c *registry.Registry, s assets.Secrets) *Catalog {
+	return &Catalog{Registry: c, Secrets: s}
 }
 
 // Deps returns the services guardrails can use. L2 guardrails get models by
-// reference ("<provider>:<model>"); an empty reference means the default from llms.yaml.
-func (c *Catalog) Deps() sdk.Deps {
-	return sdk.Deps{
+// reference ("<provider>:<model>"); an empty reference means the platform default.
+func (c *Catalog) Deps() assets.Deps {
+	return assets.Deps{
 		Secrets: c.Secrets,
 		LLM: func(ctx context.Context, ref string) (model.LLM, error) {
 			if ref == "" {
 				ref = c.DefaultModel()
 			}
 			if ref == "" {
-				return nil, fmt.Errorf("no guardrail model configured (set defaults.guardrailModel in llms.yaml)")
+				return nil, fmt.Errorf("no guardrail model available: no LLM provider offers a model (set defaults.guardrailModel in llm-providers.yaml)")
 			}
 			provider, modelID, err := c.ResolveModel(ref)
 			if err != nil {
 				return nil, err
 			}
-			cfg, _ := json.Marshal(map[string]any{"model": modelID, "maxTokens": 512, "effort": "low"})
+			cfg, _ := json.Marshal(map[string]any{"model": modelID, "maxTokens": 512})
 			return provider.New(ctx, cfg, c.Secrets)
 		},
 	}
 }
 
-// ProviderStatus is the health of one LLM provider.
+// ProviderStatus is the health of one LLM provider (gateway).
 type ProviderStatus struct {
 	ID                    string `json:"id"`
-	Type                  string `json:"type"`
+	BaseURL               string `json:"baseURL"`
 	CredentialsConfigured bool   `json:"credentialsConfigured"`
-	Models                int    `json:"models"`
-	Discovery             any    `json:"discovery"`
+	llmproviders.Status
 }
 
-// Providers reports every LLM provider's credentials, model count and discovery result.
+// Providers reports every LLM provider's endpoint, credentials and model list status.
 func (c *Catalog) Providers() []ProviderStatus {
 	out := []ProviderStatus{}
-	for _, m := range c.Manifests(sdk.KindLLM) {
-		models, _ := m.Extra["models"].([]sdk.ModelInfo)
+	for _, m := range c.Manifests(assets.KindLLM) {
 		creds, _ := m.Extra["credentialsConfigured"].(bool)
-		out = append(out, ProviderStatus{
-			ID: m.ID, Type: fmt.Sprint(m.Extra["providerType"]), CredentialsConfigured: creds,
-			Models: len(models), Discovery: m.Extra["discovery"],
-		})
+		status, _ := m.Extra["status"].(llmproviders.Status)
+		baseURL, _ := m.Extra["baseURL"].(string)
+		out = append(out, ProviderStatus{ID: m.ID, BaseURL: baseURL, CredentialsConfigured: creds, Status: status})
 	}
 	return out
 }
@@ -73,7 +71,7 @@ func (c *Catalog) Providers() []ProviderStatus {
 // Routes registers the catalog endpoints.
 func (c *Catalog) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/catalog", func(w http.ResponseWriter, r *http.Request) {
-		httpx.WriteJSON(w, http.StatusOK, c.Manifests(sdk.Kind(r.URL.Query().Get("kind"))))
+		httpx.WriteJSON(w, http.StatusOK, c.Manifests(assets.Kind(r.URL.Query().Get("kind"))))
 	})
 	mux.HandleFunc("GET /v1/catalog/{id}", func(w http.ResponseWriter, r *http.Request) {
 		m, ok := c.Manifest(r.PathValue("id"))

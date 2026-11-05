@@ -13,12 +13,13 @@ import (
 
 	"google.golang.org/adk/session"
 
-	"agentic-platform/agent-assets/assets"
-	"agentic-platform/agent-assets/llmconfig"
+	"agentic-platform/lib-agent-assets/assets"
 	"agentic-platform/ms-ai-platform/internal/agui"
 	"agentic-platform/ms-ai-platform/internal/catalog"
 	"agentic-platform/ms-ai-platform/internal/compiler"
 	"agentic-platform/ms-ai-platform/internal/httpx"
+	"agentic-platform/ms-ai-platform/internal/llmconfig"
+	"agentic-platform/ms-ai-platform/internal/llmproviders"
 	"agentic-platform/ms-ai-platform/internal/orchestrations"
 	"agentic-platform/ms-ai-platform/internal/secrets"
 	"agentic-platform/ms-ai-platform/internal/skills"
@@ -44,21 +45,26 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	llmCfg, err := llmconfig.Load(os.Getenv("LLM_CONFIG_PATH"))
+	llmCfg, err := llmconfig.Load(os.Getenv("LLM_PROVIDERS_PATH"))
 	if err != nil {
 		return err
 	}
-	registry := assets.New(ctx, assets.WithLLMConfig(llmCfg), assets.WithDiscovery(true))
+	registry := assets.New()
+	providers := llmproviders.Register(registry, llmCfg)
 	if err := registry.Validate(); err != nil {
 		return err
 	}
+	// One quick look at every provider; a gateway that is down does not block
+	// startup, the refresher keeps retrying.
+	refresher := &llmproviders.Refresher{Providers: providers}
+	refresher.RefreshAll(ctx)
 	cat := catalog.New(registry, secrets.Env{})
 	for _, p := range cat.Providers() {
 		log := slog.Info
-		if !p.CredentialsConfigured || p.Models == 0 {
+		if !p.CredentialsConfigured || p.State != "ok" {
 			log = slog.Warn
 		}
-		log("LLM provider", "id", p.ID, "type", p.Type, "models", p.Models, "credentials", p.CredentialsConfigured, "discovery", p.Discovery)
+		log("LLM provider", "id", p.ID, "url", p.BaseURL, "status", p.State, "models", p.Models, "credentials", p.CredentialsConfigured, "error", p.Error)
 	}
 
 	st, err := store.Open(ctx, env("DATABASE_URL", "postgres://postgres:postgres@localhost:5433/agentic?sslmode=disable"))
@@ -66,9 +72,18 @@ func run() error {
 		return err
 	}
 	defer st.Close()
+	st.UpgradeSpec = func(o *spec.Orchestration) {
+		spec.UpgradeLegacyLLMs(o, func(id string) bool { _, ok := registry.Get(id); return ok })
+	}
 	if err := st.SyncCatalog(ctx, registry.Manifests("")); err != nil {
 		return err
 	}
+	refresher.OnChange = func() {
+		if err := st.SyncCatalog(ctx, registry.Manifests("")); err != nil {
+			slog.Warn("catalog sync failed", "err", err)
+		}
+	}
+	refresher.Run(ctx)
 
 	validator := spec.NewValidator(registry)
 	mux := http.NewServeMux()

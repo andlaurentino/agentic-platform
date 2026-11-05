@@ -2,6 +2,8 @@ package spec
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -10,7 +12,7 @@ import (
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
-	"agentic-platform/agent-assets/sdk"
+	"agentic-platform/lib-agent-assets/pkg/assets"
 )
 
 // Severity of a validation problem. Errors block runs; warnings do not.
@@ -31,24 +33,22 @@ type Problem struct {
 
 // Catalog is what validation needs to know about assets.
 type Catalog interface {
-	Manifests(kind sdk.Kind) []sdk.Manifest
+	Manifests(kind assets.Kind) []assets.Manifest
 }
 
 var agentIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
-// Validator checks orchestration specs. It caches compiled config schemas.
+// Validator checks orchestration specs. Manifests are read on every
+// validation, since LLM model lists change at runtime; compiled config schemas
+// are cached per schema content.
 type Validator struct {
-	manifests map[string]sdk.Manifest
-	mu        sync.Mutex
-	schemas   map[string]*jsonschema.Schema
+	catalog Catalog
+	mu      sync.Mutex
+	schemas map[string]*jsonschema.Schema // by schema hash
 }
 
 func NewValidator(c Catalog) *Validator {
-	v := &Validator{manifests: map[string]sdk.Manifest{}, schemas: map[string]*jsonschema.Schema{}}
-	for _, m := range c.Manifests("") {
-		v.manifests[m.ID] = m
-	}
-	return v
+	return &Validator{catalog: c, schemas: map[string]*jsonschema.Schema{}}
 }
 
 // HasErrors reports whether any problem is an error.
@@ -59,6 +59,10 @@ func HasErrors(ps []Problem) bool {
 // Validate checks o. skillExists reports whether a skill id exists.
 func (v *Validator) Validate(o *Orchestration, skillExists func(id string) bool) []Problem {
 	var ps []Problem
+	manifests := map[string]assets.Manifest{}
+	for _, m := range v.catalog.Manifests("") {
+		manifests[m.ID] = m
+	}
 	errf := func(path, agentID, format string, args ...any) {
 		ps = append(ps, Problem{Path: path, AgentID: agentID, Message: fmt.Sprintf(format, args...), Severity: SeverityError})
 	}
@@ -92,7 +96,7 @@ func (v *Validator) Validate(o *Orchestration, skillExists func(id string) bool)
 		if a.Description == "" {
 			warnf(p+".description", a.ID, "add a description so other agents know when to hand off to this one")
 		}
-		v.checkAsset(&ps, p+".model", a.ID, a.Model, sdk.KindLLM, true)
+		v.checkAsset(manifests, &ps, p+".model", a.ID, a.Model, assets.KindLLM, true)
 		for i, s := range a.Skills {
 			if skillExists != nil && !skillExists(s) {
 				errf(fmt.Sprintf("%s.skills[%d]", p, i), a.ID, "skill %q does not exist", s)
@@ -104,7 +108,7 @@ func (v *Validator) Validate(o *Orchestration, skillExists func(id string) bool)
 			case t.MCP != "" && t.Asset != "":
 				errf(tp, a.ID, "a tool entry is either an asset or an MCP selection, not both")
 			case t.MCP != "":
-				m, ok := v.checkAsset(&ps, tp+".mcp", a.ID, AssetRef{Asset: t.MCP}, sdk.KindMCP, false)
+				m, ok := v.checkAsset(manifests, &ps, tp+".mcp", a.ID, AssetRef{Asset: t.MCP}, assets.KindMCP, false)
 				if !ok {
 					continue
 				}
@@ -118,15 +122,15 @@ func (v *Validator) Validate(o *Orchestration, skillExists func(id string) bool)
 					}
 				}
 			default:
-				v.checkAsset(&ps, tp, a.ID, AssetRef{Asset: t.Asset, Config: t.Config}, sdk.KindTool, true)
+				v.checkAsset(manifests, &ps, tp, a.ID, AssetRef{Asset: t.Asset, Config: t.Config}, assets.KindTool, true)
 			}
 		}
 		for i, g := range a.Guardrails {
-			v.checkAsset(&ps, fmt.Sprintf("%s.guardrails[%d]", p, i), a.ID, g, sdk.KindGuardrail, true)
+			v.checkAsset(manifests, &ps, fmt.Sprintf("%s.guardrails[%d]", p, i), a.ID, g, assets.KindGuardrail, true)
 		}
 	}
 	for i, g := range o.Guardrails {
-		v.checkAsset(&ps, fmt.Sprintf("guardrails[%d]", i), "", g, sdk.KindGuardrail, true)
+		v.checkAsset(manifests, &ps, fmt.Sprintf("guardrails[%d]", i), "", g, assets.KindGuardrail, true)
 	}
 
 	// Graph rules.
@@ -200,15 +204,15 @@ func findCycle(o *Orchestration) string {
 	return ""
 }
 
-func (v *Validator) checkAsset(ps *[]Problem, path, agentID string, ref AssetRef, kind sdk.Kind, checkConfig bool) (sdk.Manifest, bool) {
+func (v *Validator) checkAsset(manifests map[string]assets.Manifest, ps *[]Problem, path, agentID string, ref AssetRef, kind assets.Kind, checkConfig bool) (assets.Manifest, bool) {
 	add := func(msg string) {
 		*ps = append(*ps, Problem{Path: path, AgentID: agentID, Message: msg, Severity: SeverityError})
 	}
 	if ref.Asset == "" {
 		add(fmt.Sprintf("choose a %s", kind))
-		return sdk.Manifest{}, false
+		return assets.Manifest{}, false
 	}
-	m, ok := v.manifests[ref.Asset]
+	m, ok := manifests[ref.Asset]
 	if !ok {
 		add(fmt.Sprintf("asset %q is not in the catalog", ref.Asset))
 		return m, false
@@ -217,13 +221,26 @@ func (v *Validator) checkAsset(ps *[]Problem, path, agentID string, ref AssetRef
 		add(fmt.Sprintf("asset %q is a %s, expected a %s", ref.Asset, m.Kind, kind))
 		return m, false
 	}
-	if kind == sdk.KindLLM {
-		if models, ok := m.Extra["models"].([]sdk.ModelInfo); ok && len(models) == 0 {
-			add(fmt.Sprintf("%s has no models available; check its llms.yaml entry or model discovery", m.Name))
+	if kind == assets.KindLLM {
+		if models, ok := m.Extra["models"].([]assets.ModelInfo); ok && len(models) == 0 {
+			problem, _ := m.Extra["problem"].(string)
+			if problem == "" {
+				problem = m.Name + " has no models available"
+			}
+			add(problem)
+			return m, false
+		}
+		var cfg struct {
+			Model string `json:"model"`
+		}
+		_ = json.Unmarshal(ref.Config, &cfg)
+		if models, ok := m.Extra["models"].([]assets.ModelInfo); ok && cfg.Model != "" &&
+			!slices.ContainsFunc(models, func(mi assets.ModelInfo) bool { return mi.ID == cfg.Model }) {
+			add(fmt.Sprintf("model %q is not offered by %s; choose another model", cfg.Model, m.Name))
 			return m, false
 		}
 	}
-	if m.Lifecycle == sdk.LifecycleDeprecated {
+	if m.Lifecycle == assets.LifecycleDeprecated {
 		*ps = append(*ps, Problem{Path: path, AgentID: agentID, Message: fmt.Sprintf("%s is deprecated", m.Name), Severity: SeverityWarning})
 	}
 	if checkConfig {
@@ -234,7 +251,7 @@ func (v *Validator) checkAsset(ps *[]Problem, path, agentID string, ref AssetRef
 	return m, true
 }
 
-func (v *Validator) validateConfig(m sdk.Manifest, raw json.RawMessage) error {
+func (v *Validator) validateConfig(m assets.Manifest, raw json.RawMessage) error {
 	schema, err := v.schema(m)
 	if err != nil {
 		return err
@@ -263,15 +280,17 @@ func (v *Validator) validateConfig(m sdk.Manifest, raw json.RawMessage) error {
 	return nil
 }
 
-func (v *Validator) schema(m sdk.Manifest) (*jsonschema.Schema, error) {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	if s, ok := v.schemas[m.ID]; ok {
-		return s, nil
-	}
+func (v *Validator) schema(m assets.Manifest) (*jsonschema.Schema, error) {
 	b, err := json.Marshal(m.ConfigSchema)
 	if err != nil {
 		return nil, err
+	}
+	sum := sha256.Sum256(b)
+	key := hex.EncodeToString(sum[:])
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if s, ok := v.schemas[key]; ok {
+		return s, nil
 	}
 	doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(b))
 	if err != nil {
@@ -286,6 +305,6 @@ func (v *Validator) schema(m sdk.Manifest) (*jsonschema.Schema, error) {
 	if err != nil {
 		return nil, err
 	}
-	v.schemas[m.ID] = s
+	v.schemas[key] = s
 	return s, nil
 }

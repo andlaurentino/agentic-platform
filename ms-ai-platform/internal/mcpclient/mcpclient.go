@@ -10,7 +10,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"agentic-platform/agent-assets/sdk"
+	"agentic-platform/lib-agent-assets/pkg/assets"
 )
 
 // Tool is a discovered MCP tool.
@@ -21,8 +21,8 @@ type Tool struct {
 }
 
 // Transport returns the MCP client transport for a connection.
-func Transport(conn sdk.MCPConnection) (mcp.Transport, error) {
-	if conn.Transport != sdk.MCPTransportStreamableHTTP {
+func Transport(conn assets.MCPConnection) (mcp.Transport, error) {
+	if conn.Transport != assets.MCPTransportStreamableHTTP {
 		return nil, fmt.Errorf("unsupported MCP transport %q", conn.Transport)
 	}
 	t := &mcp.StreamableClientTransport{Endpoint: conn.URL}
@@ -46,7 +46,7 @@ func (h headerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 }
 
 // ListAllowedTools connects to the server and returns its tools that are in the allow-list.
-func ListAllowedTools(ctx context.Context, conn sdk.MCPConnection) ([]Tool, error) {
+func ListAllowedTools(ctx context.Context, conn assets.MCPConnection) ([]Tool, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	transport, err := Transport(conn)

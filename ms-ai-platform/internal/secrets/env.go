@@ -6,7 +6,7 @@ import (
 	"os"
 )
 
-// Env implements sdk.Secrets with os.Getenv.
+// Env implements assets.Secrets with os.Getenv.
 type Env struct{}
 
 func (Env) Get(name string) (string, error) {

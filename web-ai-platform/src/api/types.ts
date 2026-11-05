@@ -30,13 +30,15 @@ export interface Manifest {
   configSchema: JSONSchema
   secrets?: { name: string; description?: string }[]
   extra?: {
-    // LLM providers (from llms.yaml)
-    providerType?: "anthropic" | "openai"
+    // LLM providers: OpenAI-compatible gateways from llm-providers.yaml
     baseURL?: string
     apiKeyEnv?: string
+    apiKeyRequired?: boolean
     credentialsConfigured?: boolean
     models?: { id: string; label?: string; default?: boolean }[]
-    discovery?: { status: "off" | "ok" | "failed"; error?: string; count: number }
+    status?: { status: "pending" | "ok" | "failed"; error?: string; models: number; refreshedAt?: string }
+    /** Why the provider has no models, when it has none. */
+    problem?: string
     // guardrails
     level?: "L1" | "L2"
     stages?: string[]

@@ -1,13 +1,14 @@
 # Agentic Platform
 
-Internal platform for building conversational AI agents. Engineers register **assets** (LLMs, tools, MCP servers, guardrails) in code; builders combine them into agents and orchestrations in a visual editor and test them in a playground. See [ARCHITECTURE.md](ARCHITECTURE.md) for the full design.
+Internal platform for building conversational AI agents. Engineers register **assets** (tools, MCP servers, guardrails) in code and connect LLM providers to an **LLM gateway**; builders combine them into agents and orchestrations in a visual editor and test them in a playground. See [ARCHITECTURE.md](ARCHITECTURE.md) for the full design.
 
 This repo currently contains **slice 0**: a thin, working path through every service.
 
 | Folder | What it is |
 |---|---|
-| `agent-assets/` | Go module: asset SDK (`sdk/`), registry, `assets` CLI, and the core assets |
-| `ms-ai-platform/` | Go API: catalog, skills, orchestrations + draft, spec → Google ADK compiler, AG-UI runtime |
+| `lib-agent-assets/` | Go module: the asset library (`pkg/assets`, `pkg/registry`), the core assets (tools, MCPs, guardrails) and the `assets` CLI |
+| `ms-ai-platform/` | Go API: catalog, LLM gateway connections, skills, orchestrations + draft, spec → Google ADK compiler, AG-UI runtime |
+| `ms-llm-gateway/` | Go service: OpenAI-compatible `/v1` API in front of the LLM providers (Anthropic, OpenAI-compatible upstreams) |
 | `web-ai-platform/` | React + Tailwind + shadcn app: sidebar, catalog, skills, canvas editor, playground |
 | `demo-mcp/` | Example MCP server (fake weather, orders, FAQ) |
 
@@ -17,11 +18,22 @@ Requirements: Go 1.27+, Node 24+, Docker (for Postgres), an Anthropic API key wi
 
 ```bash
 cp .env.example .env        # set ANTHROPIC_API_KEY
-make db                     # Postgres on :5433
-make dev-mcp                # demo-mcp on :8081
-make dev-api                # ms-ai-platform on :8080 (runs migrations, syncs the catalog)
-make dev-web                # http://localhost:5173
+make up                     # Postgres + every service, with live reload → http://localhost:5173
 ```
+
+`make up` starts Postgres in Docker (:5433), then runs the services listed in [`dev.yaml`](dev.yaml) with one colored log stream:
+
+| Service | Port | Reloads when |
+|---|---|---|
+| `gateway` (ms-llm-gateway) | 8082 | `ms-llm-gateway/**/*.go`, `*.yaml` change: rebuild + restart |
+| `mcp` (demo-mcp) | 8081 | `demo-mcp/**/*.go` change |
+| `api` (ms-ai-platform) | 8080 | `ms-ai-platform/**` or `lib-agent-assets/**` (`.go`, `.yaml`, `.sql`) change |
+| `web` (Vite) | 5173 | Vite hot-reloads the browser itself |
+
+- A build that fails keeps the previous version running; fix the code and save to retry.
+- `Ctrl+C` stops all services; Postgres keeps running (`make down` stops it).
+- Run only some services: `go run ./tools/devrun api web`. Ports already in use are reported before anything starts.
+- `.env` is loaded for every service. Each service can still be run alone with `make dev-gateway`, `dev-mcp`, `dev-api`, `dev-web`.
 
 Then: **Orchestrations → New orchestration**, add agents on the canvas, drag from an agent's bottom handle to another agent to delegate, pick tools/MCP tools/guardrails/skills in the **Agent** tab, set guardrails for every agent in **Settings**, and chat in **Test**.
 
@@ -32,17 +44,26 @@ curl -N -X POST "localhost:8080/v1/orchestrations/<id>/agui?target=draft" \
   -d '{"threadId":"t1","runId":"r1","messages":[{"id":"m1","role":"user","content":"Weather in Lisbon?"}]}'
 ```
 
-`ANTHROPIC_BASE_URL` points Anthropic providers that don't set `baseURL` at another endpoint (for example a local fake) if you need to run without credits.
+Start order doesn't matter: the platform checks each LLM gateway every 10 seconds until it answers, then every minute, so models appear without a restart.
+
+`ANTHROPIC_BASE_URL` points the gateway's Anthropic providers that don't set `baseURL` at another endpoint (for example a local fake) if you need to run without credits.
 
 ## Configuring LLMs
 
-LLM providers live in [`agent-assets/config/llms.yaml`](agent-assets/config/llms.yaml). The file is embedded in the API binary and reviewed like any other asset change. A deployment can use its own file with `LLM_CONFIG_PATH=/path/to/llms.yaml`.
+LLMs are configured in two places:
 
-Each provider becomes one LLM in the catalog (`<domain>.llm.<key>`). Builders pick a provider for an agent, then a model from its list.
+```
+ms-ai-platform ──OpenAI /v1──▶ ms-llm-gateway ──▶ Anthropic, OpenAI-compatible upstreams
+   llm-providers.yaml            llms.yaml + provider keys
+```
+
+### The gateway: `ms-llm-gateway/config/llms.yaml`
+
+Upstream providers and their credentials. The file is embedded in the gateway binary; `LLM_CONFIG_PATH=/path/to/llms.yaml` uses another one. Every model is served as `<provider>/<model>`.
 
 ```yaml
 defaults:
-  guardrailModel: claude-haiku:claude-haiku-5-5   # "<provider>:<model>" used by L2 guardrails
+  model: claude-haiku/claude-haiku-5-5   # marked default in GET /v1/models
 
 providers:
   claude-haiku:
@@ -53,48 +74,83 @@ providers:
       - { id: claude-haiku-4-5, label: Claude Haiku 4.5 }
     params: { maxTokens: 4096, effort: low }
 
-  llm-gateway:
-    name: LLM Gateway
-    type: openai                       # OpenAI Chat Completions: OpenAI, LiteLLM, Portkey, vLLM, ...
-    baseURL: https://llm-gateway.internal/v1
-    apiKeyEnv: LLM_GATEWAY_API_KEY     # or `auth: none`
-    headers: { X-Team: "${TEAM_ID}" }  # ${VAR} is read from the environment when connecting
-    discover:                          # list models from GET {baseURL}/models at startup
-      include: ["gpt-4.1*", "claude-*"]
+  company-gateway:
+    name: Company Gateway
+    type: openai                       # OpenAI Chat Completions: OpenAI, LiteLLM, vLLM, ...
+    baseURL: https://llm.internal/v1
+    apiKeyEnv: COMPANY_GATEWAY_API_KEY # or `auth: none`
+    headers: { X-Team: "${TEAM_ID}" }  # ${VAR} is read from the environment per request
+    discover:                          # list models from GET {baseURL}/models
+      include: ["gpt-4.1*", "llama-*"]
       exclude: ["*embedding*"]
-    models:                            # optional: labels and the default; used if discovery fails
-      - { id: gpt-4.1-mini, label: GPT-4.1 mini, default: true }
-    params: { maxTokens: 4096 }
-    # streamUsage: false               # for gateways that reject stream_options
+      refresh: 5m
+    models:                            # optional: labels, the default, `effort: true` for reasoning models
+      - { id: gpt-4.1-mini, label: GPT-4.1 mini }
+    # streamUsage: false               # for upstreams that reject stream_options
 ```
 
 - Unknown fields are errors, so an `apiKey:` with a literal key is rejected.
-- Discovery runs at startup; restart the API to pick up new gateway models. If it fails, the API still starts with the listed models and the LLMs page shows the error.
-- OpenAI-compatible requests send `max_completion_tokens`.
-- Check a file before deploying: `go run ./agent-assets/cmd/cli llms --llm-config my-llms.yaml --discover` (or `validate`).
-- `GET /healthz` reports each provider's credentials, model count and discovery result.
+- Globs: `*` matches anything (including `/`), `?` one character.
+- `reasoning_effort` is only forwarded to models flagged `effort: true` (Claude: `output_config.effort`).
+- Claude's thinking is returned as `reasoning_content` + `thinking_blocks` and must be sent back on the assistant message (the platform does this). Other upstreams never see these fields.
+- `GATEWAY_API_KEYS=key1,key2` makes the gateway require `Authorization: Bearer <key>`. Unset means open; keep it on the internal network.
+- Check a file before deploying: `make gateway-check` or `go run ./ms-llm-gateway/cmd/gateway check --config my-llms.yaml --discover`.
+- `GET :8082/healthz` reports each provider's credentials, model count and discovery result.
+
+Try it directly:
+
+```bash
+curl localhost:8082/v1/models
+curl localhost:8082/v1/chat/completions -d '{"model":"claude-haiku/claude-haiku-5-5","messages":[{"role":"user","content":"Hi"}]}'
+```
+
+### The platform: `ms-ai-platform/config/llm-providers.yaml`
+
+The OpenAI-compatible gateways the platform uses. Each one becomes an LLM in the catalog (`core.llm.<key>`). By default only `ms-llm-gateway` is registered:
+
+```yaml
+providers:
+  gateway:                                        # core.llm.gateway
+    name: LLM Gateway
+    baseURL: ${LLM_GATEWAY_URL:-http://localhost:8082/v1}
+    apiKeyEnv: LLM_GATEWAY_API_KEY                # sent when set (one of GATEWAY_API_KEYS)
+    auth: optional
+
+  # company:                                      # another gateway, used directly
+  #   name: Company Gateway
+  #   baseURL: https://llm.internal/v1
+  #   apiKeyEnv: COMPANY_GATEWAY_API_KEY
+  #   include: ["gpt-4.1*"]
+```
+
+- `LLM_PROVIDERS_PATH=/path/to/llm-providers.yaml` uses another file.
+- Builders pick a gateway (the picker is hidden while there is only one), then a model.
+- Guardrail models are `"<gateway>:<model>"`, e.g. `gateway:claude-haiku/claude-haiku-5-5`; `defaults.guardrailModel` sets the default, otherwise the first gateway's default model.
+- Drafts saved before the gateway existed (`core.llm.claude-haiku`) are upgraded when read.
+- `GET :8080/healthz` reports each gateway's status, model count and last check.
 
 ## Tests
 
 ```bash
-make test-go     # all Go modules; set DATABASE_URL_TEST to also run the draft concurrency test
+make test-go     # all Go modules (lib-agent-assets, ms-ai-platform, ms-llm-gateway, demo-mcp); set DATABASE_URL_TEST to also run the draft concurrency test
 make test-web    # lint, vitest, production build
 ```
 
 Notable tests:
-- `ms-ai-platform/internal/agui/handler_test.go` runs the real compiler and assets end to end against a scripted fake Claude (`agent-assets/assets/core/llms/claudetest`) and an in-process MCP server: hand-off, MCP tool call, PII redaction on input and output, prompt-injection block, and that blocked messages never reach a model in later turns. With `-update` it records `testdata/run.sse`.
+- `ms-ai-platform/internal/agui/handler_test.go` runs the real compiler and assets end to end against a scripted fake gateway (`internal/llmproviders/gatewaytest`) and an in-process MCP server: hand-off, MCP tool call, Claude thinking round-trip, PII redaction on input and output, prompt-injection block, blocked messages never reaching a model in later turns, gateway errors and outages, and an orchestration spread over two gateways. With `-update` it records `testdata/run.sse`.
+- `ms-llm-gateway/internal/server/server_test.go` drives the gateway with the official `openai-go` client against a fake Claude and a fake OpenAI-compatible upstream: a streamed tool loop with the thinking round-trip, passthrough, model listing, errors and auth.
+- `ms-llm-gateway/internal/server/live_test.go` (`-tags live`) calls the real Anthropic API through the gateway.
 - `web-ai-platform/src/playground/agui-fixture.test.ts` replays that recording through `@ag-ui/client` to prove the wire format matches.
-- `agent-assets/assets/core/llms/claude_live_test.go` (`-tags live`) calls the real Anthropic API.
 
 ## Adding an asset
 
-1. Implement the `sdk.LLM`, `sdk.Tool`, `sdk.MCP` or `sdk.Guardrail` interface under `agent-assets/assets/<domain>/<kind>/`. Describe the config as a Go struct; its JSON Schema drives the UI form.
+1. Implement the `assets.Tool`, `assets.MCP` or `assets.Guardrail` interface (from `pkg/assets`) under `lib-agent-assets/assets/<domain>/<kind>/`. Describe the config as a Go struct; its JSON Schema drives the UI form.
 2. Register it in `assets/<domain>/registry.go` (and add the domain to `assets/registry.go`).
-3. `make assets-validate assets-export`, then restart the API. It appears in the sidebar and pickers.
+3. `make assets-validate`, then restart the API (`make up` restarts it for you). It appears in the sidebar and pickers.
 
 ## Slice 0 scope
 
-In: LLM providers from `llms.yaml` (Anthropic and OpenAI-compatible gateways, with model discovery); one shared draft per orchestration with `If-Match`/409; `llm` agents with hand-off (sub-agent) and call-as-tool edges; AG-UI events `RUN_*`, `STEP_*`, `TEXT_MESSAGE_*`, `TOOL_CALL_*`, `CUSTOM guardrail.decision` / `message.final`.
+In: `ms-llm-gateway` (Anthropic and OpenAI-compatible upstreams, model discovery) and one or more gateways registered in the platform; one shared draft per orchestration with `If-Match`/409; `llm` agents with hand-off (sub-agent) and call-as-tool edges; AG-UI events `RUN_*`, `STEP_*`, `TEXT_MESSAGE_*`, `TOOL_CALL_*`, `CUSTOM guardrail.decision` / `message.final`.
 
 Not yet: authentication (run it on the internal network only), publish/revisions/releases, workflow agents (sequential/parallel/loop), human-in-the-loop confirmations, persistent sessions (chat history lives in API memory and is lost on restart), traces, OpenAPI-generated clients, drag-and-drop from the sidebar onto nodes.
 

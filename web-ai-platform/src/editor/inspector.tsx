@@ -281,26 +281,33 @@ export function AgentInspector({ agentId }: { agentId: string }) {
 
       <Separator />
       <Section title="Model">
-        <Select
-          value={agent.model.asset}
-          onValueChange={(asset) => {
-            // Switching provider resets settings and picks that provider's default model.
-            const def = llms?.find((m) => m.id === asset)?.extra?.models?.find((m) => m.default)?.id
-            editAgent(agent.id, (a) => void (a.model = def ? { asset, config: { model: def } } : { asset }))
-          }}
-        >
-          <SelectTrigger className="w-full">
-            <SelectValue placeholder="Choose a model" />
-          </SelectTrigger>
-          <SelectContent>
-            {llms?.map((m) => (
-              <SelectItem key={m.id} value={m.id}>
-                {m.name}
-                {m.extra?.providerType === "openai" ? " (OpenAI-compatible)" : ""}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        {/* The provider (LLM gateway) picker only matters when more than one is registered. */}
+        {(!llm || (llms?.length ?? 0) > 1) && (
+          <Select
+            value={agent.model.asset}
+            onValueChange={(asset) => {
+              // Switching provider resets settings and picks that provider's default model.
+              const def = llms?.find((m) => m.id === asset)?.extra?.models?.find((m) => m.default)?.id
+              editAgent(agent.id, (a) => void (a.model = def ? { asset, config: { model: def } } : { asset }))
+            }}
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="Choose an LLM provider" />
+            </SelectTrigger>
+            <SelectContent>
+              {llms?.map((m) => (
+                <SelectItem key={m.id} value={m.id}>
+                  {m.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+        {llm?.extra?.status?.status === "failed" && (
+          <p className="text-xs text-destructive">
+            {llm.name} is unavailable: {llm.extra.status.error}
+          </p>
+        )}
         {llm && llm.extra?.credentialsConfigured === false && (
           <p className="text-xs text-destructive">
             {llm.extra.apiKeyEnv} is not set on the server, so runs with this provider will fail.

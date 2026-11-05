@@ -1,0 +1,40 @@
+# Services started by `make up` (tools/devrun). Paths are relative to this file.
+#
+#   dir      working directory for the commands
+#   prepare  runs once before the first start (e.g. install dependencies)
+#   build    runs before every (re)start; a failed build keeps the old process running
+#   run      the long-running process
+#   watch    directories whose changes trigger build + restart (omit to never restart)
+#   ext      file extensions to watch (_test.go files are ignored)
+#   port     checked before starting, so a service that is already running is reported
+
+services:
+  - name: gateway
+    dir: ms-llm-gateway
+    build: go build -o ../tmp/dev/gateway ./cmd/gateway
+    run: ../tmp/dev/gateway
+    watch: [ms-llm-gateway]
+    ext: [go, yaml]
+    port: 8082
+
+  - name: mcp
+    dir: demo-mcp
+    build: go build -o ../tmp/dev/demo-mcp .
+    run: ../tmp/dev/demo-mcp
+    watch: [demo-mcp]
+    ext: [go]
+    port: 8081
+
+  - name: api
+    dir: ms-ai-platform
+    build: go build -o ../tmp/dev/api ./cmd/api
+    run: ../tmp/dev/api
+    watch: [ms-ai-platform, lib-agent-assets]
+    ext: [go, yaml, sql]
+    port: 8080
+
+  - name: web
+    dir: web-ai-platform
+    prepare: test -d node_modules || npm ci
+    run: npm run dev   # Vite reloads the browser by itself
+    port: 5173

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"agentic-platform/agent-assets/assets"
+	"agentic-platform/ms-ai-platform/internal/llmproviders/llmtest"
 	"agentic-platform/ms-ai-platform/internal/spec"
 	"agentic-platform/ms-ai-platform/internal/store"
 )
@@ -27,7 +27,7 @@ func newServer(t *testing.T) *httptest.Server {
 	}
 	t.Cleanup(st.Close)
 	mux := http.NewServeMux()
-	(&Handler{Store: st, Validator: spec.NewValidator(assets.All())}).Routes(mux)
+	(&Handler{Store: st, Validator: spec.NewValidator(llmtest.Catalog(llmtest.Gateway("http://127.0.0.1:1/v1", "claude-haiku/claude-haiku-5-5")))}).Routes(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv

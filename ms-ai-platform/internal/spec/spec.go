@@ -167,7 +167,7 @@ func NewStarter(agentID string) Orchestration {
 			Name:         "Assistant",
 			Description:  "Main entry point. Answers questions and routes to specialists.",
 			Instructions: "You are a helpful assistant. Answer briefly and clearly.",
-			Model:        AssetRef{Asset: "core.llm.claude-haiku", Config: json.RawMessage(`{"model":"claude-haiku-5-5"}`)},
+			Model:        AssetRef{Asset: DefaultLLM, Config: json.RawMessage(`{}`)},
 		}},
 		Layout: map[string]Position{agentID: {X: 0, Y: 0}},
 	}

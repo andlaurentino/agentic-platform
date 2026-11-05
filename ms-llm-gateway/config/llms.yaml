@@ -1,0 +1,49 @@
+# Upstream LLM providers served by ms-llm-gateway.
+#
+# Every model is exposed on the gateway's OpenAI-compatible API as
+# "<provider>/<model>" (for example claude-haiku/claude-haiku-5-5).
+#
+# Credentials are never written here: `apiKeyEnv` names the environment
+# variable that holds the key. Header values may reference env vars with ${VAR}.
+#
+# This file is embedded in the gateway binary. A deployment can use a
+# different file by setting LLM_CONFIG_PATH.
+
+defaults:
+  # Marked `default: true` in GET /v1/models; clients use it when they have no preference.
+  model: claude-haiku/claude-haiku-5-5
+
+providers:
+  claude-haiku:
+    name: Claude Haiku
+    description: Anthropic's fastest, lowest-cost Claude models. Good for routing, chat and tool use.
+    type: anthropic
+    apiKeyEnv: ANTHROPIC_API_KEY
+    models:
+      - { id: claude-haiku-5-5, label: Claude Haiku 5.5, default: true, effort: true }
+      - { id: claude-haiku-4-5, label: Claude Haiku 4.5 }
+    params:
+      maxTokens: 4096
+      effort: low
+
+  # An OpenAI-compatible upstream (OpenAI, LiteLLM, vLLM, a company gateway, ...).
+  # Models are discovered from GET {baseURL}/models and filtered.
+  #
+  # company-gateway:
+  #   name: Company Gateway
+  #   description: The company's LLM gateway.
+  #   type: openai
+  #   baseURL: https://llm.internal/v1
+  #   apiKeyEnv: COMPANY_GATEWAY_API_KEY
+  #   headers:
+  #     X-Client: ms-llm-gateway
+  #     X-Team: ${TEAM_ID}
+  #   discover:
+  #     include: ["gpt-4.1*", "llama-3*"]
+  #     exclude: ["*embedding*", "*whisper*"]
+  #     refresh: 5m
+  #   models:   # optional: labels, the default and reasoning-effort support; also used if discovery fails
+  #     - { id: gpt-4.1-mini, label: GPT-4.1 mini, default: true }
+  #     - { id: o4-mini, label: o4 mini, effort: true }
+  #   params:
+  #     maxTokens: 4096

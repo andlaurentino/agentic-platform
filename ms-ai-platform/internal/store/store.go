@@ -13,7 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 
-	"agentic-platform/agent-assets/sdk"
+	"agentic-platform/lib-agent-assets/pkg/assets"
 	"agentic-platform/ms-ai-platform/internal/spec"
 	"agentic-platform/ms-ai-platform/migrations"
 )
@@ -26,6 +26,8 @@ var (
 
 type Store struct {
 	pool *pgxpool.Pool
+	// UpgradeSpec, when set, rewrites outdated specs as drafts are read.
+	UpgradeSpec func(*spec.Orchestration)
 }
 
 // Open connects and runs migrations.
@@ -56,7 +58,7 @@ func (s *Store) Close()                         { s.pool.Close() }
 func (s *Store) Ping(ctx context.Context) error { return s.pool.Ping(ctx) }
 
 // SyncCatalog upserts every manifest and removes rows for assets that no longer exist.
-func (s *Store) SyncCatalog(ctx context.Context, ms []sdk.Manifest) error {
+func (s *Store) SyncCatalog(ctx context.Context, ms []assets.Manifest) error {
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		ids := make([]string, 0, len(ms))
 		for _, m := range ms {
@@ -253,7 +255,11 @@ func scanDraft(row pgx.Row) (Draft, error) {
 }
 
 func (s *Store) GetDraft(ctx context.Context, orchestrationID string) (Draft, error) {
-	return scanDraft(s.pool.QueryRow(ctx, `select `+draftCols+` from draft where orchestration_id = $1`, orchestrationID))
+	d, err := scanDraft(s.pool.QueryRow(ctx, `select `+draftCols+` from draft where orchestration_id = $1`, orchestrationID))
+	if err == nil && s.UpgradeSpec != nil {
+		s.UpgradeSpec(&d.Spec)
+	}
+	return d, err
 }
 
 // SaveDraft writes the spec only if the stored version still equals expectedVersion.

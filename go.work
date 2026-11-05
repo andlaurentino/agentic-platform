@@ -1,7 +1,9 @@
 go 1.27.0
 
 use (
-	./agent-assets
+	./lib-agent-assets
 	./demo-mcp
 	./ms-ai-platform
+	./ms-llm-gateway
+	./tools
 )

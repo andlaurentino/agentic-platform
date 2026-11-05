@@ -1,0 +1,42 @@
+# LLM providers the platform can use. Each one is an OpenAI-compatible
+# endpoint (/v1/models and /v1/chat/completions): ms-llm-gateway, or any other
+# LLM gateway. Each provider becomes one LLM in the catalog (core.llm.<key>);
+# builders pick a provider for an agent, then one of its models.
+#
+# The upstream providers and their credentials (Anthropic, OpenAI, ...) are
+# configured in ms-llm-gateway, not here.
+#
+# Values may reference env vars: ${VAR}, or ${VAR:-default}.
+# This file is embedded in the platform binary. A deployment can use a
+# different file by setting LLM_PROVIDERS_PATH.
+
+defaults:
+  # Model used by L2 guardrails, as "<provider>:<model>". Empty means the
+  # default model of the first provider.
+  guardrailModel: ""
+
+providers:
+  gateway:
+    name: LLM Gateway
+    description: The platform's LLM gateway (ms-llm-gateway). Serves Claude and the other models it is configured with.
+    baseURL: ${LLM_GATEWAY_URL:-http://localhost:8082/v1}
+    # Sent as a bearer token when set; the gateway only needs it when GATEWAY_API_KEYS is configured.
+    apiKeyEnv: LLM_GATEWAY_API_KEY
+    auth: optional
+
+  # Another OpenAI-compatible gateway (LiteLLM, Portkey, a company gateway, ...).
+  #
+  # company-gateway:
+  #   name: Company Gateway
+  #   description: The company's LLM gateway.
+  #   baseURL: https://llm.internal/v1
+  #   apiKeyEnv: COMPANY_GATEWAY_API_KEY
+  #   headers:
+  #     X-Team: ${TEAM_ID}
+  #   include: ["gpt-4.1*", "llama-3*"]    # filter its GET /v1/models
+  #   exclude: ["*embedding*"]
+  #   models:                              # optional: labels and the default; used while it is unreachable
+  #     - { id: gpt-4.1-mini, label: GPT-4.1 mini, default: true }
+  #   params:
+  #     maxTokens: 4096
+  #   streamUsage: false                   # for endpoints that reject stream_options

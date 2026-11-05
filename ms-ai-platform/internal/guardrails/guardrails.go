@@ -14,7 +14,7 @@ import (
 	"google.golang.org/adk/model"
 	"google.golang.org/genai"
 
-	"agentic-platform/agent-assets/sdk"
+	"agentic-platform/lib-agent-assets/pkg/assets"
 )
 
 // BlockedMessage is what the user sees when a guardrail blocks a message.
@@ -54,26 +54,26 @@ func blockedHashes(cctx agent.CallbackContext) []string {
 
 // Decision is reported to the UI for every guardrail that did something.
 type Decision struct {
-	GuardrailID string             `json:"guardrailId"`
-	Name        string             `json:"name"`
-	Level       sdk.GuardrailLevel `json:"level"`
-	Stage       sdk.Stage          `json:"stage"`
-	Action      sdk.Action         `json:"action"`
-	Reason      string             `json:"reason,omitempty"`
-	Labels      []string           `json:"labels,omitempty"`
-	AgentID     string             `json:"agentId,omitempty"`
+	GuardrailID string                `json:"guardrailId"`
+	Name        string                `json:"name"`
+	Level       assets.GuardrailLevel `json:"level"`
+	Stage       assets.Stage          `json:"stage"`
+	Action      assets.Action         `json:"action"`
+	Reason      string                `json:"reason,omitempty"`
+	Labels      []string              `json:"labels,omitempty"`
+	AgentID     string                `json:"agentId,omitempty"`
 }
 
 // Bound is a guardrail asset with its config applied.
 type Bound struct {
 	ID     string
 	Name   string
-	Level  sdk.GuardrailLevel
-	Stages []sdk.Stage
-	Check  sdk.Check
+	Level  assets.GuardrailLevel
+	Stages []assets.Stage
+	Check  assets.Check
 }
 
-func (b Bound) runsAt(s sdk.Stage) bool { return slices.Contains(b.Stages, s) }
+func (b Bound) runsAt(s assets.Stage) bool { return slices.Contains(b.Stages, s) }
 
 // Run holds state shared by every agent's callbacks during one run: a result
 // cache (ADK rebuilds the request before each model call, so the same text is
@@ -81,7 +81,7 @@ func (b Bound) runsAt(s sdk.Stage) bool { return slices.Contains(b.Stages, s) }
 type Run struct {
 	sink     func(Decision)
 	mu       sync.Mutex
-	results  map[string]sdk.GuardResult
+	results  map[string]assets.GuardResult
 	reported map[string]bool
 }
 
@@ -89,10 +89,10 @@ func NewRun(sink func(Decision)) *Run {
 	if sink == nil {
 		sink = func(Decision) {}
 	}
-	return &Run{sink: sink, results: map[string]sdk.GuardResult{}, reported: map[string]bool{}}
+	return &Run{sink: sink, results: map[string]assets.GuardResult{}, reported: map[string]bool{}}
 }
 
-func (r *Run) check(ctx context.Context, b Bound, stage sdk.Stage, text string) sdk.GuardResult {
+func (r *Run) check(ctx context.Context, b Bound, stage assets.Stage, text string) assets.GuardResult {
 	key := b.ID + "\x00" + string(stage) + "\x00" + text
 	r.mu.Lock()
 	res, ok := r.results[key]
@@ -100,9 +100,9 @@ func (r *Run) check(ctx context.Context, b Bound, stage sdk.Stage, text string) 
 	if ok {
 		return res
 	}
-	res, err := b.Check(ctx, sdk.GuardInput{Stage: stage, Text: text})
+	res, err := b.Check(ctx, assets.GuardInput{Stage: stage, Text: text})
 	if err != nil {
-		res = sdk.GuardResult{Action: sdk.ActionBlock, Reason: fmt.Sprintf("guardrail failed: %v", err), Labels: []string{"guardrail_error"}}
+		res = assets.GuardResult{Action: assets.ActionBlock, Reason: fmt.Sprintf("guardrail failed: %v", err), Labels: []string{"guardrail_error"}}
 	}
 	r.mu.Lock()
 	r.results[key] = res
@@ -110,8 +110,8 @@ func (r *Run) check(ctx context.Context, b Bound, stage sdk.Stage, text string) 
 	return res
 }
 
-func (r *Run) report(b Bound, agentID string, stage sdk.Stage, text string, res sdk.GuardResult) {
-	if res.Action == sdk.ActionAllow || res.Action == "" {
+func (r *Run) report(b Bound, agentID string, stage assets.Stage, text string, res assets.GuardResult) {
+	if res.Action == assets.ActionAllow || res.Action == "" {
 		return
 	}
 	key := b.ID + "\x00" + string(stage) + "\x00" + text
@@ -127,9 +127,9 @@ func (r *Run) report(b Bound, agentID string, stage sdk.Stage, text string, res 
 
 // apply runs L1 checks in order (stopping on block), then L2 checks in parallel.
 // It returns the possibly redacted text and whether the text is blocked.
-func (r *Run) apply(ctx context.Context, bounds []Bound, stage sdk.Stage, text string, agentID string, withL2, report bool) (string, bool) {
+func (r *Run) apply(ctx context.Context, bounds []Bound, stage assets.Stage, text string, agentID string, withL2, report bool) (string, bool) {
 	for _, b := range bounds {
-		if b.Level != sdk.L1 || !b.runsAt(stage) {
+		if b.Level != assets.L1 || !b.runsAt(stage) {
 			continue
 		}
 		res := r.check(ctx, b, stage, text)
@@ -137,9 +137,9 @@ func (r *Run) apply(ctx context.Context, bounds []Bound, stage sdk.Stage, text s
 			r.report(b, agentID, stage, text, res)
 		}
 		switch res.Action {
-		case sdk.ActionBlock, sdk.ActionEscalate:
+		case assets.ActionBlock, assets.ActionEscalate:
 			return text, true
-		case sdk.ActionRedact:
+		case assets.ActionRedact:
 			text = res.Redacted
 		}
 	}
@@ -148,11 +148,11 @@ func (r *Run) apply(ctx context.Context, bounds []Bound, stage sdk.Stage, text s
 	}
 	var l2 []Bound
 	for _, b := range bounds {
-		if b.Level == sdk.L2 && b.runsAt(stage) {
+		if b.Level == assets.L2 && b.runsAt(stage) {
 			l2 = append(l2, b)
 		}
 	}
-	results := make([]sdk.GuardResult, len(l2))
+	results := make([]assets.GuardResult, len(l2))
 	var wg sync.WaitGroup
 	for i, b := range l2 {
 		wg.Go(func() { results[i] = r.check(ctx, b, stage, text) })
@@ -164,9 +164,9 @@ func (r *Run) apply(ctx context.Context, bounds []Bound, stage sdk.Stage, text s
 			r.report(b, agentID, stage, text, results[i])
 		}
 		switch results[i].Action {
-		case sdk.ActionBlock, sdk.ActionEscalate:
+		case assets.ActionBlock, assets.ActionEscalate:
 			blocked = true
-		case sdk.ActionRedact:
+		case assets.ActionRedact:
 			text = results[i].Redacted
 		}
 	}
@@ -210,7 +210,7 @@ func BeforeModel(run *Run, agentID string, bounds []Bound) llmagent.BeforeModelC
 					continue
 				}
 				isLatest := latest != "" && p.Text == latest
-				text, isBlocked := run.apply(cctx, bounds, sdk.StageInput, p.Text, agentID, isLatest, isLatest)
+				text, isBlocked := run.apply(cctx, bounds, assets.StageInput, p.Text, agentID, isLatest, isLatest)
 				if isBlocked && isLatest {
 					if err := cctx.State().Set(blockedStateKey, append(slices.Clone(blocked), textHash(p.Text))); err != nil {
 						return nil, err
@@ -246,7 +246,7 @@ func AfterModel(run *Run, agentID string, bounds []Bound) llmagent.AfterModelCal
 			if p == nil || p.Thought || p.Text == "" {
 				continue
 			}
-			text, blocked := run.apply(cctx, bounds, sdk.StageOutput, p.Text, agentID, final, final)
+			text, blocked := run.apply(cctx, bounds, assets.StageOutput, p.Text, agentID, final, final)
 			if blocked {
 				text = BlockedMessage
 			}

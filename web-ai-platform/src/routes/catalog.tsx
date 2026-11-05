@@ -8,10 +8,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Skeleton } from "@/components/ui/skeleton"
 
 const titles: Record<Kind, { title: string; description: string }> = {
-  tool: { title: "Tools", description: "Native functions engineers registered in agent-assets." },
+  tool: { title: "Tools", description: "Native functions engineers registered in lib-agent-assets." },
   mcp: { title: "MCP servers", description: "MCP server contracts and the tools agents are allowed to use." },
   guardrail: { title: "Guardrails", description: "Policy checks that run around model calls. L1 is rule-based, L2 is model-based." },
-  llm: { title: "LLMs", description: "LLM providers from llms.yaml. Each agent picks a provider, then one of its models." },
+  llm: { title: "LLMs", description: "LLM gateways the platform connects to. Agents pick one of their models; the lists refresh every minute." },
 }
 
 export function LifecycleBadge({ lifecycle }: { lifecycle: Manifest["lifecycle"] }) {
@@ -40,18 +40,35 @@ function McpTools({ id }: { id: string }) {
   )
 }
 
+const statusBadges = {
+  ok: <Badge variant="secondary">connected</Badge>,
+  pending: <Badge variant="outline">connecting</Badge>,
+  failed: <Badge variant="destructive">unreachable</Badge>,
+}
+
 function ProviderDetails({ m }: { m: Manifest }) {
   const x = m.extra ?? {}
   const models = x.models ?? []
+  const status = x.status
   return (
     <div className="grid gap-2 text-xs">
       <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
-        <dt className="text-muted-foreground">Protocol</dt>
-        <dd>{x.providerType === "openai" ? "OpenAI-compatible (Chat Completions)" : "Anthropic Messages"}</dd>
         {x.baseURL && (
           <>
             <dt className="text-muted-foreground">Endpoint</dt>
             <dd className="font-mono break-all">{x.baseURL}</dd>
+          </>
+        )}
+        {status && (
+          <>
+            <dt className="text-muted-foreground">Status</dt>
+            <dd className="grid gap-0.5">
+              <span className="flex items-center gap-1.5">
+                {statusBadges[status.status]}
+                {status.refreshedAt && <span className="text-muted-foreground">checked {new Date(status.refreshedAt).toLocaleTimeString()}</span>}
+              </span>
+              {status.error && <span className="break-all text-destructive">{status.error}</span>}
+            </dd>
           </>
         )}
         {x.apiKeyEnv && (
@@ -59,24 +76,20 @@ function ProviderDetails({ m }: { m: Manifest }) {
             <dt className="text-muted-foreground">API key</dt>
             <dd className="flex items-center gap-1.5">
               <code className="font-mono">{x.apiKeyEnv}</code>
-              {x.credentialsConfigured ? <Badge variant="secondary">set</Badge> : <Badge variant="destructive">not set</Badge>}
-            </dd>
-          </>
-        )}
-        {x.discovery && x.discovery.status !== "off" && (
-          <>
-            <dt className="text-muted-foreground">Discovery</dt>
-            <dd className={x.discovery.status === "failed" ? "text-destructive" : undefined}>
-              {x.discovery.status === "ok" ? `${x.discovery.count} models found` : `failed: ${x.discovery.error}`}
+              {x.credentialsConfigured === false ? (
+                <Badge variant="destructive">not set</Badge>
+              ) : (
+                <Badge variant="secondary">{x.apiKeyRequired ? "set" : "optional"}</Badge>
+              )}
             </dd>
           </>
         )}
       </dl>
       <div>
-        <p className="mb-1 font-medium">Models</p>
+        <p className="mb-1 font-medium">Models ({models.length})</p>
         {models.length === 0 ? (
           <p className="flex items-center gap-1.5 text-destructive">
-            <AlertCircle className="size-3.5" /> No models available
+            <AlertCircle className="size-3.5" /> {x.problem ?? "No models available"}
           </p>
         ) : (
           <div className="flex max-h-40 flex-wrap gap-1 overflow-y-auto">
@@ -171,7 +184,7 @@ export function CatalogPage() {
         {error && <p className="text-sm text-destructive">Could not load the catalog: {error.message}</p>}
         {isLoading && <Skeleton className="h-40" />}
         {data?.length === 0 && (
-          <EmptyState title="Nothing registered yet" description="Engineers add assets in agent-assets; they appear here after the platform is deployed." />
+          <EmptyState title="Nothing registered yet" description="Engineers add assets in lib-agent-assets; they appear here after the platform is deployed." />
         )}
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {data?.map((m) => <AssetCard key={m.id} m={m} />)}

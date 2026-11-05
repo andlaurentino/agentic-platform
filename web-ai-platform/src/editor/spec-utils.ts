@@ -8,7 +8,8 @@ export function newAgent(spec: OrchestrationSpec): AgentSpec {
     name: `Agent ${n}`,
     description: "",
     instructions: "",
-    model: { asset: "core.llm.claude-haiku", config: { model: "claude-haiku-5-5" } },
+    // The platform's LLM gateway; an empty config uses its default model.
+    model: { asset: "core.llm.gateway", config: {} },
     skills: [],
     tools: [],
     guardrails: [],

@@ -9,19 +9,22 @@ There are two kinds of users:
 | Persona | What they do | Where they work |
 |---|---|---|
 | **Builder** (end user: product, ops, CX, analysts) | Builds agents in a visual editor, combining instructions, skills, tools, MCP servers, guardrails, and an LLM, and connects agents into an orchestration. Tests in a playground, then publishes. | `web-ai-platform` |
-| **Asset developer** (engineer) | Writes the technical pieces (LLM connectors, tools, MCP contracts, guardrails) in Go, registers them, and ships them through code review. | `agent-assets` |
+| **Asset developer** (engineer) | Writes the technical pieces (tools, MCP contracts, guardrails) in Go, registers them, and ships them through code review. | `lib-agent-assets` |
+| **Platform operator** (engineer) | Connects LLM providers and their credentials to the LLM gateway, and registers gateways with the platform. | `ms-llm-gateway`, `ms-ai-platform` config |
 
 The main idea: **engineers write code once as *assets*, and builders combine those assets through configuration.** Builders never write code. Engineers never have to build each agent by hand.
 
 ```mermaid
 flowchart LR
-    Dev[Asset developer] -->|PR + review| AA[agent-assets<br/>Go module + CLI]
+    Dev[Asset developer] -->|PR + review| AA[lib-agent-assets<br/>Go module + CLI]
     AA -->|compiled in + catalog sync| API[ms-ai-platform<br/>Go · ADK · REST · Postgres]
     Builder[Builder] --> WEB[web-ai-platform<br/>React · Tailwind · shadcn]
     WEB -->|REST: specs, catalog| API
     WEB -->|AG-UI events over SSE| API
     API -->|MCP over HTTP| MCP[MCP servers<br/>demo-mcp, team MCPs]
-    API -->|provider APIs| LLM[LLM providers]
+    API -->|OpenAI Chat Completions| GW[ms-llm-gateway<br/>Go · OpenAI-compatible /v1]
+    GW -->|Anthropic Messages · OpenAI-compatible| LLM[LLM providers]
+    API -.->|optional: other OpenAI-compatible gateways| LLM
     API --> PG[(Postgres)]
     API --> SEC[Secret manager]
     API --> OTEL[OpenTelemetry]
@@ -53,16 +56,18 @@ flowchart LR
 
 ## 2. Repository layout
 
-This is a monorepo. Each service is a top-level folder. The Go services share a `go.work` workspace so `ms-ai-platform` can use local `agent-assets` changes during development.
+This is a monorepo. Each service is a top-level folder. The Go services share a `go.work` workspace so `ms-ai-platform` can use local `lib-agent-assets` changes during development.
 
 ```
 agentic-platform/
 ├── ARCHITECTURE.md
-├── go.work                 # agent-assets, ms-ai-platform, demo-mcp
-├── agent-assets/           # Asset SDK + registry + CLI (Go module)
+├── go.work                 # lib-agent-assets, ms-ai-platform, ms-llm-gateway, demo-mcp, tools
+├── lib-agent-assets/       # Asset SDK + registry + CLI (Go module)
 ├── ms-ai-platform/         # Platform API + agent runtime (Go)
+├── ms-llm-gateway/         # OpenAI-compatible /v1 API in front of the LLM providers (Go)
 ├── web-ai-platform/        # Visual builder SPA (React)
 ├── demo-mcp/               # Example MCP server (Go)
+├── tools/devrun/           # `make up`: runs dev.yaml services with live reload
 ├── deploy/                 # Helm charts / k8s manifests, docker-compose for local dev
 └── docs/                   # ADRs, asset authoring guide, runbooks
 ```
@@ -73,8 +78,8 @@ agentic-platform/
 
 | Concept | Defined in | Description |
 |---|---|---|
-| **Asset** | `agent-assets` | A code component with a manifest: `llm`, `tool`, `mcp`, `guardrail`. Identified by `{domain}.{kind}.{name}` and versioned with the module release. |
-| **Asset manifest** | `agent-assets` | Metadata (id, kind, domain, owner, description, icon, tags, lifecycle) plus a **JSON Schema** for its config. The UI renders config forms from this schema. |
+| **Asset** | `lib-agent-assets` | A code component with a manifest: `llm`, `tool`, `mcp`, `guardrail`. Identified by `{domain}.{kind}.{name}` and versioned with the module release. |
+| **Asset manifest** | `lib-agent-assets` | Metadata (id, kind, domain, owner, description, icon, tags, lifecycle) plus a **JSON Schema** for its config. The UI renders config forms from this schema. |
 | **Asset instance** | `ms-ai-platform` | A reference to an asset plus the config values a builder entered (e.g. guardrail `core.guardrail.pii-redact` with `{ "entities": ["email","cpf"] }`). |
 | **Skill** | `ms-ai-platform` | A reusable, versioned package of instructions (Markdown) plus optional required tools. Builders write skills in the UI and attach them to agents. |
 | **Agent** | `ms-ai-platform` | Instructions + LLM instance + skills + tools/MCP tools + guardrails + the sub-agents it may delegate to. |
@@ -89,7 +94,7 @@ agentic-platform/
 
 ## 4. Services
 
-### 4.1 `agent-assets`
+### 4.1 `lib-agent-assets`
 
 A Go module and registry that engineers use to make code components available to the platform. It is a **library, not a running service**: `ms-ai-platform` imports it, and a CLI validates it and exports its catalog.
 
@@ -98,7 +103,7 @@ A Go module and registry that engineers use to make code components available to
 #### Folder structure
 
 ```
-agent-assets/
+lib-agent-assets/
 ├── cmd/
 │   └── cli/                    # `assets` CLI: list, validate, export, test, scaffold
 ├── assets/
@@ -106,24 +111,22 @@ agent-assets/
 │   │   ├── guardrails/
 │   │   ├── tools/
 │   │   ├── mcps/
-│   │   ├── llms/
 │   │   └── registry.go         # func Register(r *registry.Registry)
 │   ├── {domain}/               # e.g. payments/, customer-care/, lending/
 │   │   ├── guardrails/
 │   │   ├── tools/
 │   │   ├── mcps/
 │   │   └── registry.go
-│   └── registry.go             # Aggregates core + all domains: assets.All()
-├── sdk/                        # Public asset interfaces imported by ms-ai-platform
-├── internal/
-│   ├── registry/               # Registry type, duplicate/ID validation, lookup
-│   ├── manifest/               # Manifest types, lifecycle, JSON Schema helpers
-│   └── testkit/                # Conformance tests every asset must pass
-└── catalog/
-    └── catalog.json            # Generated by `assets export` (checked by CI)
+│   └── registry.go             # Aggregates core + all domains: assets.New()
+└── pkg/                        # The library other modules import
+    ├── assets/                 # Asset interfaces, manifest types, JSON Schema helpers
+    ├── registry/               # Registry type: registration, validation, lookup, model refs
+    └── testkit/                # Conformance tests every asset must pass (planned)
 ```
 
-> The asset *interfaces* that `ms-ai-platform` uses must be importable, so they live in the public `sdk/` package. Registry internals stay under `internal/`.
+> There is no checked-in catalog file: the Go code is the source of truth. `ms-ai-platform` builds the catalog from it at startup and syncs it to Postgres; `assets export` prints it as JSON when another tool needs it.
+
+> Everything another module needs lives under `pkg/` and is a public library: `pkg/assets` to write assets, `pkg/registry` to hold a catalog of them (the platform also registers its LLM gateways there). The top-level `assets/` folder holds the assets themselves, and its `New()` returns a registry with all of them (import it with an alias, e.g. `allassets`, next to `pkg/assets`).
 
 #### Asset contract
 
@@ -143,6 +146,8 @@ type Manifest struct {
     Secrets      []SecretRef        // names of secrets the asset needs, never values
 }
 
+// LLM is implemented by the platform, not by lib-agent-assets: ms-ai-platform
+// registers one per LLM gateway it connects to (see 4.2 and 4.5).
 type LLM interface {
     Manifest() Manifest
     New(ctx context.Context, cfg json.RawMessage, s Secrets) (model.LLM, error)  // ADK model
@@ -180,7 +185,7 @@ type GuardResult struct {
 
 | Kind | Purpose | Notes |
 |---|---|---|
-| **llms** | One asset per provider declared in `config/llms.yaml` (embedded; `LLM_CONFIG_PATH` overrides it per deployment). Two protocols: Anthropic Messages and OpenAI Chat Completions, so any OpenAI-compatible LLM gateway works. Returns an ADK `model.LLM`. | Builders pick a provider, then a model from its list (configured, or discovered from the gateway's `/models` with include/exclude filters). The key comes from the env var named in `apiKeyEnv`; header values can use `${VAR}`. |
+| **llms** | Not shipped by lib-agent-assets: it holds no LLM connection details. `ms-ai-platform` registers one LLM per OpenAI-compatible gateway listed in its `config/llm-providers.yaml` (by default only `ms-llm-gateway`, as `core.llm.gateway`). Returns an ADK `model.LLM`. | Builders pick a gateway (hidden when there is only one), then a model from the list it serves on `GET /v1/models`, refreshed every minute. Guardrails reference models as `"<gateway>:<model>"`. |
 | **tools** | Native Go functions exposed to agents as ADK tools. | Input/output are typed structs, and the LLM-facing schema is generated from them. Must declare side effects (`read` / `write`) so writes can require confirmation. |
 | **mcps** | The contract for an MCP server: transport (streamable HTTP / SSE), URL per environment, auth mode (none, static token, OAuth2 client credentials, mTLS), and an **allow-list** of tools. | The platform discovers tools through `tools/list` and filters them with the allow-list. Builders choose tools from that filtered list. |
 | **guardrails** | Policy checks that run around model and tool calls. | **L1**: deterministic and fast (regex, keyword lists, PII patterns, length limits, schema validation). Redact or block. **L2**: model-based (prompt-injection and jailbreak detection, topic/off-scope classification, toxicity, grounding checks). Has its own LLM instance and higher latency. |
@@ -209,7 +214,7 @@ func Register(r *registry.Registry) {
 }
 
 // assets/registry.go
-func All() *registry.Registry {
+func New() *registry.Registry {
     r := registry.New()
     core.Register(r)
     payments.Register(r)
@@ -226,7 +231,7 @@ Registration is explicit (no `init()` side effects), which makes the catalog pre
 |---|---|
 | `assets list [--kind] [--domain]` | Print the catalog |
 | `assets validate` | Unique IDs, valid manifests, schemas compile, owners set, secrets declared |
-| `assets export > catalog/catalog.json` | Write the catalog file (CI fails if it is out of date) |
+| `assets export [-o file]` | Print every manifest as JSON (for other tools; nothing in the repo reads it) |
 | `assets test <id>` | Run the asset against `testkit` conformance tests and its own fixtures |
 | `assets new <kind> <domain> <name>` | Scaffold a new asset with tests |
 | `assets run guardrail <id> --input "..."` | Try a guardrail locally |
@@ -237,13 +242,13 @@ Registration is explicit (no `init()` side effects), which makes the catalog pre
 sequenceDiagram
     participant Dev as Asset developer
     participant CI as CI
-    participant AA as agent-assets
+    participant AA as lib-agent-assets
     participant P as ms-ai-platform
     participant UI as web-ai-platform
     Dev->>AA: PR adds payments.tool.refund-lookup
-    CI->>AA: assets validate + test + export diff + CODEOWNERS review
+    CI->>AA: assets validate + test + CODEOWNERS review
     AA->>AA: merge, tag vX.Y.Z
-    P->>P: bump agent-assets dependency, deploy
+    P->>P: bump lib-agent-assets dependency, deploy
     P->>P: on startup, sync catalog into Postgres
     UI->>P: GET /v1/catalog
     P-->>UI: new tool appears in the sidebar and pickers
@@ -274,7 +279,9 @@ ms-ai-platform/
 │   └── migrate/
 ├── api/openapi.yaml        # Source of truth for the REST contract (also generates the TS client)
 ├── internal/
-│   ├── catalog/            # Loads agent-assets.All(), syncs to Postgres
+│   ├── catalog/            # Loads lib-agent-assets.All() + the LLM providers, syncs to Postgres
+│   ├── llmconfig/          # config/llm-providers.yaml: the OpenAI-compatible gateways to use
+│   ├── llmproviders/       # One LLM asset per gateway: model list refresh, ADK model over Chat Completions
 │   ├── spec/               # Agent/Orchestration spec types, validation, JSON Schema
 │   ├── versioning/         # Draft (optimistic concurrency), linear revisions, diff
 │   ├── release/            # Environments, promotion, rollback
@@ -299,7 +306,7 @@ Builders edit this document through the UI. It is stored as JSONB in the draft a
   "type": "llm",                       // llm | sequential | parallel | loop (ADK workflow agents)
   "description": "Handles refund status and requests",  // used by the parent for routing
   "instructions": "You help customers with refunds...",
-  "model": { "asset": "core.llm.claude-haiku", "config": { "model": "claude-haiku-5-5", "effort": "low" } },
+  "model": { "asset": "core.llm.gateway", "config": { "model": "claude-haiku/claude-haiku-5-5", "effort": "low" } },
   "skills": [ { "ref": "skl_refund_policy", "version": 3 } ],
   "tools": [
     { "asset": "payments.tool.refund-lookup", "config": {} },
@@ -441,6 +448,7 @@ erDiagram
 #### Security (v1)
 
 - **No authentication or authorization** in the first release (see 1.1). The service is only reachable on the internal network. All handlers get a request context that has a place for a caller identity, so auth middleware can be added later without changing handlers.
+- **LLM credentials** live only in `ms-llm-gateway` (env vars named in its `llms.yaml`). The platform holds at most a key for the gateway itself (`LLM_GATEWAY_API_KEY`), and the gateway can require one with `GATEWAY_API_KEYS`.
 - **Secrets:** specs contain secret *references* only. Values are fetched at compile time per environment and are never returned by the API, sent in AG-UI events, or written to logs or traces.
 - **MCP auth:** each MCP manifest says how the platform authenticates to the server (static token, client credentials, mTLS). Delegated end-user tokens come with platform auth.
 - **Guardrails:** mandatory guardrails per environment are enforced by the compiler, so a builder cannot skip them even without access control.
@@ -499,9 +507,29 @@ An example MCP server for local development, demos, and as a reference implement
 **Tech stack:** Go, official MCP Go SDK (`github.com/modelcontextprotocol/go-sdk`), streamable HTTP transport.
 
 - **Example tools:** `get_weather(city)`, `lookup_order(order_id)` (fake data), `create_ticket(subject, body)` (a *write* tool that shows the AG-UI confirmation flow), and `search_faq(query)`.
-- Includes a matching asset in `agent-assets/assets/core/mcps/demo.go` (the contract plus the tool allow-list), so it shows up in the catalog from start to finish.
+- Includes a matching asset in `lib-agent-assets/assets/core/mcps/demo.go` (the contract plus the tool allow-list), so it shows up in the catalog from start to finish.
 - Optional static bearer-token auth to show how MCP auth modes work.
 - Health check at `/healthz`. Runs in `docker-compose` next to the platform.
+
+### 4.5 `ms-llm-gateway`
+
+A small Go service that puts every LLM provider behind **one OpenAI-compatible API**. `ms-ai-platform` only speaks OpenAI Chat Completions to it, so provider credentials, protocols and model lists stay out of the platform and out of `lib-agent-assets`.
+
+**Tech stack:** Go, official Anthropic Go SDK for Claude, plain HTTP passthrough for OpenAI-compatible upstreams.
+
+- **Config:** `config/llms.yaml` (embedded; `LLM_CONFIG_PATH` overrides it). Each provider has a `type` (`anthropic` or `openai`), optional `baseURL` and `headers` (`${VAR}` expanded per request), `apiKeyEnv` (the *name* of the env var with the key; literal keys are rejected), `models` (labels, the default, which accept reasoning effort), `params`, and for OpenAI-compatible upstreams optional `discover` (`GET /models` with include/exclude globs, refreshed every `refresh`, 5 minutes by default). `defaults.model` marks the gateway's default model.
+- **API:**
+  - `GET /v1/models`: every model as `"<provider>/<model>"` (for example `claude-haiku/claude-haiku-5-5`), with `display_name` and `default` extensions.
+  - `POST /v1/chat/completions`, streaming or not: messages, tools, `tool_choice`, `parallel_tool_calls`, `max_tokens` / `max_completion_tokens`, `stop`, `reasoning_effort`, `stream_options.include_usage`. Unsupported options (`n > 1`, images, `response_format` on Claude) get a clear 400.
+  - `GET /healthz`: per provider, whether its key is set, model count and discovery status. No secrets.
+- **Anthropic adapter:** translates Chat Completions to the Messages API and back, including stream events (text, tool-call argument fragments, usage, finish reasons) and `reasoning_effort` → `output_config.effort` for models that support it.
+- **Reasoning extension:** Claude's signed thinking blocks travel as `reasoning_content` + `thinking_blocks` on responses, and are sent back on assistant messages (the same convention LiteLLM uses). This keeps tool loops valid when Claude thinks. They are stripped before reaching OpenAI-compatible upstreams.
+- **OpenAI-compatible upstreams:** the body is forwarded with the model id rewritten, the key and headers injected, and fields the upstream may not accept removed; responses stream back unchanged.
+- **Errors** use the OpenAI shape. A missing or invalid upstream key is a 502 that names the env var; rate limits pass through as 429.
+- **Auth:** optional; `GATEWAY_API_KEYS` (comma-separated) makes `/v1/*` require `Authorization: Bearer`. Off by default, like the rest of v1.
+- **Logs:** one line per call with provider, model, stream, status, duration and token counts. Message content is never logged.
+
+On the platform side, `ms-ai-platform/config/llm-providers.yaml` lists the gateways to use (`LLM_PROVIDERS_PATH` overrides it). The default entry is this gateway at `${LLM_GATEWAY_URL:-http://localhost:8082/v1}`; more OpenAI-compatible gateways (LiteLLM, a company gateway) can be added next to it, each becoming its own LLM in the catalog.
 
 ---
 
@@ -509,7 +537,7 @@ An example MCP server for local development, demos, and as a reference implement
 
 ### 5.1 Engineer publishes a new asset
 1. `assets new tool payments refund-lookup` creates the code and tests.
-2. Implement it, run `assets test`, then `assets export`.
+2. Implement it and run `assets validate` and `assets test`.
 3. Open a PR. CI validates it and CODEOWNERS approve it. Merge and tag a release.
 4. `ms-ai-platform` updates the dependency and deploys. Catalog sync upserts the asset into Postgres.
 5. Builders see it in the sidebar and pickers.
@@ -562,8 +590,8 @@ sequenceDiagram
 
 ## 7. Local development
 
-- `docker-compose up` starts Postgres, `ms-ai-platform`, `demo-mcp`, `web-ai-platform` (Vite dev server), and an OTel collector with Jaeger.
-- `go.work` links `agent-assets` into `ms-ai-platform`, so local asset changes show up after a restart.
+- `make up` starts Postgres (Docker) and runs `ms-llm-gateway`, `demo-mcp`, `ms-ai-platform` and the `web-ai-platform` Vite dev server with live reload. `tools/devrun` reads `dev.yaml`, rebuilds and restarts a Go service when its files change, and keeps the previous build running when a build fails. `docker-compose --profile full` can also run the backend services in containers.
+- `go.work` links `lib-agent-assets` into `ms-ai-platform`, so local asset changes show up after a restart.
 - A seed script creates an example orchestration that uses the demo MCP.
 - The AG-UI endpoint can be tried without the UI: `curl -N -X POST .../agui -H 'Accept: text/event-stream' -d @run.json`.
 
@@ -573,7 +601,7 @@ sequenceDiagram
 
 | Phase | Scope |
 |---|---|
-| **Slice 0** (built) | agent-assets SDK + CLI with Claude Haiku LLM, current-time tool, demo MCP, L1 PII redaction and L2 prompt-injection guardrails; demo-mcp; catalog sync; one shared draft per orchestration with optimistic concurrency; React Flow canvas + inspector; AG-UI playground (draft only). See README.md for what is in and out. |
+| **Slice 0** (built) | lib-agent-assets SDK + CLI with current-time tool, demo MCP, L1 PII redaction and L2 prompt-injection guardrails; demo-mcp; catalog sync; one shared draft per orchestration with optimistic concurrency; React Flow canvas + inspector; AG-UI playground (draft only); ms-llm-gateway (Claude + OpenAI-compatible upstreams) with the platform registering one or more gateways. See README.md for what is in and out. |
 | **MVP** | Publish + linear revisions and history, Postgres session store, traces in the playground |
 | **Production** | Environments, releases and rollback, mandatory guardrails, L2 guardrails, AG-UI endpoint for channels on the internal network |
 | **Access control** | SSO (OIDC), RBAC (viewer, builder, releaser, admin), per-team asset access, release approvals, audit log, delegated end-user tokens for MCP |
@@ -586,7 +614,7 @@ sequenceDiagram
 ## 9. Open questions
 
 1. **"Backstage application":** does `ms-ai-platform` need to be a **Backstage** plugin (TypeScript, inside the developer portal), or is it a standalone Go backend as described here? A middle option: a Backstage plugin that only *displays* the asset catalog, with the Go backend as the source of truth.
-2. **Skills as assets:** should engineers also be able to ship skills from `agent-assets` (e.g. compliance-approved policy text), or are skills only written in the UI?
+2. **Skills as assets:** should engineers also be able to ship skills from `lib-agent-assets` (e.g. compliance-approved policy text), or are skills only written in the UI?
 3. **LLM providers:** which providers and hosting (Vertex AI, Bedrock, Anthropic API, self-hosted) are approved for each data classification?
 4. **Channels:** which channels are needed first (web widget, WhatsApp, Slack, internal API)? Non-AG-UI channels (WhatsApp, Slack) would need adapters that consume the AG-UI stream and post the final messages.
 5. **Secret manager:** Vault, GCP Secret Manager, or AWS Secrets Manager?

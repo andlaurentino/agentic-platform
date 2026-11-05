@@ -26,5 +26,20 @@ services:
       - ../demo-mcp:/src/demo-mcp
     profiles: ["full"]
 
+  ms-llm-gateway:
+    image: golang:1.27
+    working_dir: /src/ms-llm-gateway
+    command: go run ./cmd/gateway
+    environment:
+      GATEWAY_ADDR: ":8082"
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      LLM_CONFIG_PATH: ${LLM_CONFIG_PATH:-}
+      GATEWAY_API_KEYS: ${GATEWAY_API_KEYS:-}
+    ports:
+      - "8082:8082"
+    volumes:
+      - ../ms-llm-gateway:/src/ms-llm-gateway
+    profiles: ["full"]
+
 volumes:
   pgdata:
