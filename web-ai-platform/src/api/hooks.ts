@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { api } from "./client"
-import type { Kind, Manifest, McpTool, Orchestration, Skill } from "./types"
+import type { AgentRecord, AgentSpec, Kind, Manifest, McpTool, Orchestration, Skill } from "./types"
 
 export const keys = {
   catalog: (kind?: Kind) => ["catalog", kind ?? "all"] as const,
@@ -10,6 +10,8 @@ export const keys = {
   orchestrations: ["orchestrations"] as const,
   orchestration: (id: string) => ["orchestrations", id] as const,
   draft: (id: string) => ["draft", id] as const,
+  agents: ["agents"] as const,
+  agent: (id: string) => ["agents", id] as const,
 }
 
 export function useCatalog(kind?: Kind) {
@@ -89,5 +91,41 @@ export function useDeleteOrchestration() {
   return useMutation({
     mutationFn: (id: string) => api<void>(`/v1/orchestrations/${id}`, { method: "DELETE" }),
     onSuccess: () => qc.invalidateQueries({ queryKey: keys.orchestrations }),
+  })
+}
+
+export function useAgents() {
+  return useQuery({ queryKey: keys.agents, queryFn: () => api<AgentRecord[]>("/v1/agents") })
+}
+
+export function useAgent(id: string) {
+  return useQuery({ queryKey: keys.agent(id), queryFn: () => api<AgentRecord>(`/v1/agents/${id}`) })
+}
+
+export function createAgent(agent: Partial<AgentSpec>, updatedByName: string) {
+  return api<AgentRecord>("/v1/agents", { method: "POST", body: JSON.stringify({ ...agent, updatedByName }) })
+}
+
+export function saveAgent(agent: AgentSpec, version: number, updatedByName: string) {
+  return api<AgentRecord>(`/v1/agents/${agent.id}`, {
+    method: "PUT",
+    headers: { "If-Match": `"${version}"` },
+    body: JSON.stringify({ ...agent, updatedByName }),
+  })
+}
+
+export function useCreateAgent() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ agent, by }: { agent: Partial<AgentSpec>; by: string }) => createAgent(agent, by),
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.agents }),
+  })
+}
+
+export function useDeleteAgent() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => api<void>(`/v1/agents/${id}`, { method: "DELETE" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.agents }),
   })
 }

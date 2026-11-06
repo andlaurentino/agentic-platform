@@ -14,6 +14,7 @@ import (
 	"google.golang.org/adk/session"
 
 	"agentic-platform/lib-agent-assets/assets"
+	"agentic-platform/ms-ai-platform/internal/agents"
 	"agentic-platform/ms-ai-platform/internal/agui"
 	"agentic-platform/ms-ai-platform/internal/catalog"
 	"agentic-platform/ms-ai-platform/internal/compiler"
@@ -89,6 +90,7 @@ func run() error {
 	mux := http.NewServeMux()
 	cat.Routes(mux)
 	(&skills.Handler{Store: st}).Routes(mux)
+	(&agents.Handler{Store: st, Validator: validator}).Routes(mux)
 	(&orchestrations.Handler{Store: st, Validator: validator}).Routes(mux)
 	mux.Handle("POST /v1/orchestrations/{id}/agui", &agui.Handler{
 		Source:   st,

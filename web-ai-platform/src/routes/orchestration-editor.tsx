@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Canvas } from "@/editor/canvas"
-import { AgentInspector, OrchestrationSettings } from "@/editor/inspector"
+import { AgentInspector, EdgeInspector, OrchestrationSettings } from "@/editor/inspector"
 import { useEditor } from "@/editor/store"
 import { saveDraft, useDraft } from "@/editor/use-draft"
 import { Playground } from "@/playground/playground"
@@ -56,10 +56,10 @@ function ConflictBanner() {
   return (
     <Alert variant="destructive" className="m-3 mb-0 w-auto">
       <AlertCircle />
-      <AlertTitle>Someone else changed this orchestration</AlertTitle>
+      <AlertTitle>{conflict.kind === "agent" ? "Someone else changed this agent" : "Someone else changed this orchestration"}</AlertTitle>
       <AlertDescription className="flex flex-wrap items-center gap-2">
         <span>{conflict.message}. Your latest edits are not saved.</span>
-        <Button size="sm" variant="outline" onClick={() => useEditor.getState().reset(orchestrationId, conflict.draft)}>
+        <Button size="sm" variant="outline" onClick={() => useEditor.getState().loadTheirs()}>
           Load their version
         </Button>
         <Button size="sm" variant="ghost" onClick={() => useEditor.getState().keepMine()}>
@@ -84,7 +84,7 @@ export function OrchestrationEditorPage() {
   useEffect(
     () =>
       useEditor.subscribe((s, prev) => {
-        if (s.selection !== prev.selection) setTab((t) => (t === "test" ? t : s.selection.kind === "agent" ? "agent" : "settings"))
+        if (s.selection !== prev.selection) setTab((t) => (t === "test" ? t : s.selection.kind === "orchestration" ? "settings" : "agent"))
       }),
     [],
   )
@@ -135,13 +135,15 @@ export function OrchestrationEditorPage() {
           <aside className="flex w-[420px] shrink-0 flex-col border-l">
             <Tabs value={tab} onValueChange={setTab} className="flex min-h-0 flex-1 flex-col gap-0">
               <TabsList className="m-2 w-auto">
-                <TabsTrigger value="agent">Agent</TabsTrigger>
+                <TabsTrigger value="agent">{selection.kind === "edge" ? "Connection" : "Agent"}</TabsTrigger>
                 <TabsTrigger value="settings">Settings</TabsTrigger>
                 <TabsTrigger value="test">Test</TabsTrigger>
               </TabsList>
               <TabsContent value="agent" className="min-h-0 flex-1 overflow-y-auto">
                 {selection.kind === "agent" ? (
                   <AgentInspector agentId={selection.id} />
+                ) : selection.kind === "edge" ? (
+                  <EdgeInspector from={selection.from} to={selection.to} />
                 ) : (
                   <p className="p-4 text-sm text-muted-foreground">Select an agent on the canvas to edit it.</p>
                 )}

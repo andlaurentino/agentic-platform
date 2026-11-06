@@ -1,124 +1,38 @@
 import { Link } from "@tanstack/react-router"
-import { AlertCircle, AlertTriangle, Crown, Trash2, X } from "lucide-react"
-import { useMemo, type ReactNode } from "react"
-import { useCatalog, useMcpTools, useSkills } from "@/api/hooks"
-import type { AgentSpec, AssetRef, Config, EdgeMode, Manifest, OrchestrationSpec, Problem } from "@/api/types"
-import { SchemaForm } from "@/components/schema-form"
-import { hasFields } from "@/lib/schema"
+import { ArrowDown, Crown, ExternalLink, Trash2, X } from "lucide-react"
+import { useMemo } from "react"
+import type { AgentSpec, EdgeMode, OrchestrationSpec } from "@/api/types"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Separator } from "@/components/ui/separator"
-import { Textarea } from "@/components/ui/textarea"
+import { AgentForm, GuardrailPicker, ProblemList, Section } from "./agent-form"
+import { makeRoot, removeAgent, removeEdge } from "./spec-utils"
 import { useEditor } from "./store"
 
-function Section({ title, hint, children }: { title: string; hint?: ReactNode; children: ReactNode }) {
+export { ProblemList } from "./agent-form"
+
+export const edgeModeHint = "Hand off passes the conversation over. Calls as tool asks the agent and gets its answer back."
+
+export function EdgeModeSelect({ value, onChange, className }: { value: EdgeMode; onChange: (m: EdgeMode) => void; className?: string }) {
   return (
-    <section className="grid gap-2">
-      <div>
-        <h3 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">{title}</h3>
-        {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
-      </div>
-      {children}
-    </section>
+    <Select value={value} onValueChange={(m) => onChange(m as EdgeMode)}>
+      <SelectTrigger className={className}>
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="transfer">Hands off</SelectItem>
+        <SelectItem value="tool">Calls as tool</SelectItem>
+      </SelectContent>
+    </Select>
   )
 }
 
-export function ProblemList({ problems, onSelect }: { problems: Problem[]; onSelect?: (agentId: string) => void }) {
-  if (problems.length === 0) return null
-  return (
-    <ul className="grid gap-1.5">
-      {problems.map((p, i) => (
-        <li key={i}>
-          <button
-            type="button"
-            className="flex w-full items-start gap-2 rounded-md p-1.5 text-left text-xs hover:bg-muted disabled:hover:bg-transparent"
-            onClick={() => p.agentId && onSelect?.(p.agentId)}
-            disabled={!onSelect || !p.agentId}
-          >
-            {p.severity === "error" ? (
-              <AlertCircle className="mt-0.5 size-3.5 shrink-0 text-destructive" />
-            ) : (
-              <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-amber-500" />
-            )}
-            <span>{p.message}</span>
-          </button>
-        </li>
-      ))}
-    </ul>
-  )
-}
-
-/** Checkbox list of guardrail assets with per-guardrail config. */
-function GuardrailPicker({ value, onChange, idPrefix }: { value: AssetRef[]; onChange: (v: AssetRef[]) => void; idPrefix: string }) {
-  const { data: guardrails } = useCatalog("guardrail")
-  return (
-    <div className="grid gap-3">
-      {guardrails?.map((g) => {
-        const ref = value.find((r) => r.asset === g.id)
-        return (
-          <div key={g.id} className="grid gap-2 rounded-md border p-2.5">
-            <label className="flex items-start gap-2 text-sm">
-              <Checkbox
-                className="mt-0.5"
-                checked={!!ref}
-                onCheckedChange={(c) => onChange(c ? [...value, { asset: g.id }] : value.filter((r) => r.asset !== g.id))}
-              />
-              <span className="grid gap-0.5">
-                <span className="flex items-center gap-1.5 font-medium">
-                  {g.name} {g.extra?.level && <Badge variant="outline">{g.extra.level}</Badge>}
-                </span>
-                <span className="text-xs text-muted-foreground">{g.description}</span>
-              </span>
-            </label>
-            {ref && hasFields(g.configSchema) && (
-              <div className="pl-6">
-                <SchemaForm
-                  idPrefix={`${idPrefix}-${g.id}`}
-                  schema={g.configSchema}
-                  value={ref.config}
-                  onChange={(config) => onChange(value.map((r) => (r.asset === g.id ? { ...r, config } : r)))}
-                />
-              </div>
-            )}
-          </div>
-        )
-      })}
-    </div>
-  )
-}
-
-function McpToolPicker({ mcp, agent }: { mcp: Manifest; agent: AgentSpec }) {
-  const { data: tools, error, isLoading } = useMcpTools(mcp.id)
-  const { editAgent } = useEditor.getState()
-  const selected = agent.tools.find((t) => t.mcp === mcp.id)?.tools ?? []
-
-  const toggle = (name: string, on: boolean) =>
-    editAgent(agent.id, (a) => {
-      const next = on ? [...selected, name] : selected.filter((n) => n !== name)
-      a.tools = a.tools.filter((t) => t.mcp !== mcp.id)
-      if (next.length > 0) a.tools.push({ mcp: mcp.id, tools: next })
-    })
-
-  return (
-    <div className="grid gap-2 rounded-md border p-2.5">
-      <p className="text-sm font-medium">{mcp.name}</p>
-      {isLoading && <p className="text-xs text-muted-foreground">Loading tools…</p>}
-      {error && <p className="text-xs text-destructive">Server unreachable: {error.message}</p>}
-      {tools?.map((t) => (
-        <label key={t.name} className="flex items-start gap-2 text-sm">
-          <Checkbox className="mt-0.5" checked={selected.includes(t.name)} onCheckedChange={(c) => toggle(t.name, !!c)} />
-          <span className="grid">
-            <code className="font-mono text-xs font-medium">{t.name}</code>
-            <span className="text-xs text-muted-foreground">{t.description}</span>
-          </span>
-        </label>
-      ))}
-    </div>
-  )
+function setEdgeMode(from: string, to: string, mode: EdgeMode) {
+  useEditor.getState().edit((s) => {
+    const x = s.edges.find((y) => y.from === from && y.to === to)
+    if (x) x.mode = mode
+  })
 }
 
 function Delegation({ agent, spec }: { agent: AgentSpec; spec: OrchestrationSpec }) {
@@ -135,33 +49,13 @@ function Delegation({ agent, spec }: { agent: AgentSpec; spec: OrchestrationSpec
       {outgoing.map((e) => (
         <div key={e.to} className="flex items-center gap-2">
           <span className="min-w-0 flex-1 truncate text-sm">{name(e.to)}</span>
-          <Select
-            value={e.mode}
-            onValueChange={(mode) =>
-              edit((s) => {
-                const x = s.edges.find((y) => y.from === e.from && y.to === e.to)
-                if (x) x.mode = mode as EdgeMode
-              })
-            }
-          >
-            <SelectTrigger className="h-8 w-36 text-xs">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="transfer">Hands off</SelectItem>
-              <SelectItem value="tool">Calls as tool</SelectItem>
-            </SelectContent>
-          </Select>
+          <EdgeModeSelect value={e.mode} onChange={(m) => setEdgeMode(e.from, e.to, m)} className="h-8 w-36 text-xs" />
           <Button
             variant="ghost"
             size="icon"
             className="size-8"
             aria-label={`Stop delegating to ${name(e.to)}`}
-            onClick={() =>
-              edit((s) => {
-                s.edges = s.edges.filter((y) => !(y.from === e.from && y.to === e.to))
-              })
-            }
+            onClick={() => edit((s) => removeEdge(s, e.from, e.to))}
           >
             <X />
           </Button>
@@ -194,218 +88,114 @@ function Delegation({ agent, spec }: { agent: AgentSpec; spec: OrchestrationSpec
 
 export function AgentInspector({ agentId }: { agentId: string }) {
   const spec = useEditor((s) => s.spec)!
+  const record = useEditor((s) => s.agentRecords[agentId])
+  const orchestrationId = useEditor((s) => s.orchestrationId)
   // Select the stable array, then filter: a selector returning a new array re-renders forever.
   const allProblems = useEditor((s) => s.problems)
   const problems = useMemo(() => allProblems.filter((p) => p.agentId === agentId), [allProblems, agentId])
   const { editAgent, edit, select } = useEditor.getState()
-  const { data: llms } = useCatalog("llm")
-  const { data: tools } = useCatalog("tool")
-  const { data: mcps } = useCatalog("mcp")
-  const { data: skills } = useSkills()
 
   const agent = spec.agents.find((a) => a.id === agentId)
   if (!agent) return <p className="p-4 text-sm text-muted-foreground">Select an agent on the canvas.</p>
   const isRoot = spec.rootAgent === agent.id
-  const llm = llms?.find((m) => m.id === agent.model.asset)
-  const setField = <K extends keyof AgentSpec>(key: K, v: AgentSpec[K]) => editAgent(agent.id, (a) => void (a[key] = v))
+  const elsewhere = (record?.usedBy ?? []).filter((o) => o.id !== orchestrationId)
 
   return (
     <div className="grid gap-5 p-4">
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         {isRoot && (
           <Badge variant="secondary" className="gap-1">
             <Crown className="size-3 text-amber-500" /> Root agent
           </Badge>
         )}
         <div className="flex-1" />
+        <Button variant="ghost" size="sm" asChild>
+          <Link to="/agents/$id" params={{ id: agent.id }}>
+            <ExternalLink /> Agent page
+          </Link>
+        </Button>
         {!isRoot && (
           <>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() =>
-                edit((s) => {
-                  s.rootAgent = agent.id
-                  // The root cannot have a parent.
-                  s.edges = s.edges.filter((e) => e.to !== agent.id)
-                })
-              }
-            >
+            <Button variant="outline" size="sm" onClick={() => edit((s) => makeRoot(s, agent.id))}>
               <Crown /> Make root
             </Button>
             <Button
               variant="ghost"
               size="sm"
+              title="Removes the agent from this orchestration. It stays in the agent library."
               onClick={() => {
-                edit((s) => {
-                  s.agents = s.agents.filter((a) => a.id !== agent.id)
-                  s.edges = s.edges.filter((e) => e.from !== agent.id && e.to !== agent.id)
-                  delete s.layout[agent.id]
-                })
+                edit((s) => removeAgent(s, agent.id))
                 select({ kind: "orchestration" })
               }}
             >
-              <Trash2 /> Delete
+              <Trash2 /> Remove
             </Button>
           </>
         )}
       </div>
 
+      {elsewhere.length > 0 && (
+        <p className="rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">
+          Shared agent: changes also apply to {elsewhere.map((o) => o.name).join(", ")}.
+        </p>
+      )}
+
       <ProblemList problems={problems} />
 
-      <Section title="Agent">
-        <div className="grid gap-1.5">
-          <Label htmlFor="agent-name">Name</Label>
-          <Input id="agent-name" value={agent.name} onChange={(e) => setField("name", e.target.value)} />
-        </div>
-        <div className="grid gap-1.5">
-          <Label htmlFor="agent-desc">Description</Label>
-          <Input
-            id="agent-desc"
-            value={agent.description}
-            onChange={(e) => setField("description", e.target.value)}
-            placeholder="When should other agents hand off to this one?"
-          />
-        </div>
-        <div className="grid gap-1.5">
-          <Label htmlFor="agent-instructions">Instructions</Label>
-          <Textarea
-            id="agent-instructions"
-            className="min-h-32 text-sm"
-            value={agent.instructions}
-            onChange={(e) => setField("instructions", e.target.value)}
-            placeholder="You are a helpful assistant that…"
-          />
-        </div>
-      </Section>
+      <AgentForm agent={agent} idPrefix={agent.id} update={(fn: (a: AgentSpec) => void) => editAgent(agent.id, fn)} />
 
       <Separator />
-      <Section title="Model">
-        {/* The provider (LLM gateway) picker only matters when more than one is registered. */}
-        {(!llm || (llms?.length ?? 0) > 1) && (
-          <Select
-            value={agent.model.asset}
-            onValueChange={(asset) => {
-              // Switching provider resets settings and picks that provider's default model.
-              const def = llms?.find((m) => m.id === asset)?.extra?.models?.find((m) => m.default)?.id
-              editAgent(agent.id, (a) => void (a.model = def ? { asset, config: { model: def } } : { asset }))
-            }}
-          >
-            <SelectTrigger className="w-full">
-              <SelectValue placeholder="Choose an LLM provider" />
-            </SelectTrigger>
-            <SelectContent>
-              {llms?.map((m) => (
-                <SelectItem key={m.id} value={m.id}>
-                  {m.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        )}
-        {llm?.extra?.status?.status === "failed" && (
-          <p className="text-xs text-destructive">
-            {llm.name} is unavailable: {llm.extra.status.error}
-          </p>
-        )}
-        {llm && llm.extra?.credentialsConfigured === false && (
-          <p className="text-xs text-destructive">
-            {llm.extra.apiKeyEnv} is not set on the server, so runs with this provider will fail.
-          </p>
-        )}
-        {llm && (
-          <SchemaForm
-            idPrefix={`${agent.id}-model`}
-            schema={llm.configSchema}
-            value={agent.model.config}
-            onChange={(config: Config) => editAgent(agent.id, (a) => void (a.model.config = config))}
-          />
-        )}
-      </Section>
-
-      <Separator />
-      <Section
-        title="Skills"
-        hint={
-          <>
-            Added to this agent's instructions.{" "}
-            <Link to="/skills" className="underline">
-              Manage skills
-            </Link>
-          </>
-        }
-      >
-        {skills?.length === 0 && <p className="text-xs text-muted-foreground">No skills yet.</p>}
-        {skills?.map((s) => (
-          <label key={s.id} className="flex items-start gap-2 text-sm">
-            <Checkbox
-              className="mt-0.5"
-              checked={agent.skills.includes(s.id)}
-              onCheckedChange={(c) => setField("skills", c ? [...agent.skills, s.id] : agent.skills.filter((x) => x !== s.id))}
-            />
-            <span className="grid">
-              <span className="font-medium">{s.name}</span>
-              {s.description && <span className="text-xs text-muted-foreground">{s.description}</span>}
-            </span>
-          </label>
-        ))}
-      </Section>
-
-      <Separator />
-      <Section title="Tools">
-        {tools?.map((t) => {
-          const ref = agent.tools.find((x) => x.asset === t.id)
-          return (
-            <div key={t.id} className="grid gap-2">
-              <label className="flex items-start gap-2 text-sm">
-                <Checkbox
-                  className="mt-0.5"
-                  checked={!!ref}
-                  onCheckedChange={(c) =>
-                    editAgent(agent.id, (a) => {
-                      a.tools = c ? [...a.tools, { asset: t.id }] : a.tools.filter((x) => x.asset !== t.id)
-                    })
-                  }
-                />
-                <span className="grid">
-                  <span className="font-medium">{t.name}</span>
-                  <span className="text-xs text-muted-foreground">{t.description}</span>
-                </span>
-              </label>
-              {ref && hasFields(t.configSchema) && (
-                <div className="pl-6">
-                  <SchemaForm
-                    idPrefix={`${agent.id}-${t.id}`}
-                    schema={t.configSchema}
-                    value={ref.config}
-                    onChange={(config) =>
-                      editAgent(agent.id, (a) => {
-                        const x = a.tools.find((y) => y.asset === t.id)
-                        if (x) x.config = config
-                      })
-                    }
-                  />
-                </div>
-              )}
-            </div>
-          )
-        })}
-      </Section>
-
-      <Separator />
-      <Section title="MCP tools" hint="Only tools in each server's allow-list are shown.">
-        {mcps?.map((m) => <McpToolPicker key={m.id} mcp={m} agent={agent} />)}
-      </Section>
-
-      <Separator />
-      <Section title="Guardrails" hint="Only for this agent. Guardrails for every agent are in Settings.">
-        <GuardrailPicker idPrefix={agent.id} value={agent.guardrails} onChange={(g) => setField("guardrails", g)} />
-      </Section>
-
-      <Separator />
-      <Section title="Delegates to" hint="Hand off passes the conversation over. Calls as tool asks the agent and gets its answer back.">
+      <Section title="Delegates to" hint={edgeModeHint}>
         <Delegation agent={agent} spec={spec} />
       </Section>
+    </div>
+  )
+}
+
+export function EdgeInspector({ from, to }: { from: string; to: string }) {
+  const spec = useEditor((s) => s.spec)!
+  const allProblems = useEditor((s) => s.problems)
+  const { edit, select } = useEditor.getState()
+  const index = spec.edges.findIndex((e) => e.from === from && e.to === to)
+  const problems = useMemo(
+    () => allProblems.filter((p) => p.path === `edges[${index}]` || p.path.startsWith(`edges[${index}].`)),
+    [allProblems, index],
+  )
+  const edge = spec.edges[index]
+  if (!edge) return <p className="p-4 text-sm text-muted-foreground">Select a connection on the canvas.</p>
+  const name = (id: string) => spec.agents.find((a) => a.id === id)?.name || "Untitled agent"
+  const agentButton = (id: string) => (
+    <Button variant="outline" className="w-full justify-start" onClick={() => select({ kind: "agent", id })}>
+      {id === spec.rootAgent && <Crown className="text-amber-500" />}
+      <span className="truncate">{name(id)}</span>
+    </Button>
+  )
+
+  return (
+    <div className="grid gap-5 p-4">
+      <ProblemList problems={problems} />
+      <Section title="Connection">
+        <div className="grid justify-items-center gap-1">
+          {agentButton(edge.from)}
+          <ArrowDown className="size-4 text-muted-foreground" />
+          {agentButton(edge.to)}
+        </div>
+      </Section>
+      <Separator />
+      <Section title="How it delegates" hint={edgeModeHint}>
+        <EdgeModeSelect value={edge.mode} onChange={(m) => setEdgeMode(from, to, m)} className="w-full" />
+      </Section>
+      <Separator />
+      <Button
+        variant="outline"
+        className="justify-self-start"
+        onClick={() => {
+          edit((s) => removeEdge(s, from, to))
+          select({ kind: "orchestration" })
+        }}
+      >
+        <X /> Remove connection
+      </Button>
     </div>
   )
 }
@@ -424,12 +214,7 @@ export function OrchestrationSettings() {
       <Section title="Root agent" hint="Every conversation starts here.">
         <Select
           value={spec.rootAgent}
-          onValueChange={(id) =>
-            edit((s) => {
-              s.rootAgent = id
-              s.edges = s.edges.filter((e) => e.to !== id)
-            })
-          }
+          onValueChange={(id) => edit((s) => makeRoot(s, id))}
         >
           <SelectTrigger className="w-full">
             <SelectValue placeholder="Choose the root agent" />

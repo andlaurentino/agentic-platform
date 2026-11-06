@@ -114,6 +114,21 @@ export interface AgentSpec {
   guardrails: AssetRef[]
 }
 
+export interface OrchestrationRef {
+  id: string
+  name: string
+}
+
+/** A library agent: shared by every orchestration that uses it. */
+export interface AgentRecord extends AgentSpec {
+  version: number
+  createdAt: string
+  updatedAt: string
+  updatedByName: string
+  usedBy: OrchestrationRef[]
+}
+
+/** An orchestration with its agents resolved; the editor works on this shape. */
 export interface OrchestrationSpec {
   rootAgent: string
   agents: AgentSpec[]
@@ -122,9 +137,16 @@ export interface OrchestrationSpec {
   layout: Record<string, { x: number; y: number }>
 }
 
+/** How a draft is stored: the ids of the library agents it uses, and how they connect. */
+export interface DraftGraph extends Omit<OrchestrationSpec, "agents"> {
+  agents: string[]
+}
+
 export interface Draft {
   orchestrationId: string
-  spec: OrchestrationSpec
+  spec: DraftGraph
+  /** The library agents the graph uses, in graph order. */
+  agents: AgentRecord[]
   version: number
   updatedAt: string
   updatedByName: string

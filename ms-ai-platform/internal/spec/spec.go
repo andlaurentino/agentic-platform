@@ -6,7 +6,8 @@ import (
 	"strings"
 )
 
-// Orchestration is a graph of agents with one root.
+// Orchestration is a graph of agents with one root, with the agents resolved
+// from the library. Validation, compilation and runs work on this form.
 type Orchestration struct {
 	RootAgent  string              `json:"rootAgent"`
 	Agents     []Agent             `json:"agents"`
@@ -15,6 +16,18 @@ type Orchestration struct {
 	Layout     map[string]Position `json:"layout"`
 }
 
+// Graph is how an orchestration is stored: the ids of the library agents it
+// uses and how they connect. Agents are shared, so editing one changes every
+// orchestration that uses it.
+type Graph struct {
+	RootAgent  string              `json:"rootAgent"`
+	Agents     []string            `json:"agents"`
+	Edges      []Edge              `json:"edges"`
+	Guardrails []AssetRef          `json:"guardrails"` // applied to every agent
+	Layout     map[string]Position `json:"layout"`
+}
+
+// Agent is a reusable agent from the library.
 type Agent struct {
 	ID           string     `json:"id"`
 	Name         string     `json:"name"`
@@ -76,21 +89,82 @@ func (o *Orchestration) Normalize() {
 		o.Layout = map[string]Position{}
 	}
 	for i := range o.Agents {
-		a := &o.Agents[i]
-		if a.Skills == nil {
-			a.Skills = []string{}
-		}
-		if a.Tools == nil {
-			a.Tools = []ToolRef{}
-		}
-		if a.Guardrails == nil {
-			a.Guardrails = []AssetRef{}
-		}
+		o.Agents[i].Normalize()
 	}
 	for i := range o.Edges {
 		if o.Edges[i].Mode == "" {
 			o.Edges[i].Mode = EdgeTransfer
 		}
+	}
+}
+
+// Normalize replaces nil slices and maps, defaults edge modes, and drops edges
+// and positions of agents the graph does not use.
+func (g *Graph) Normalize() {
+	if g.Agents == nil {
+		g.Agents = []string{}
+	}
+	if g.Guardrails == nil {
+		g.Guardrails = []AssetRef{}
+	}
+	used := map[string]bool{}
+	for _, id := range g.Agents {
+		used[id] = true
+	}
+	edges := []Edge{}
+	for _, e := range g.Edges {
+		if used[e.From] && used[e.To] {
+			if e.Mode == "" {
+				e.Mode = EdgeTransfer
+			}
+			edges = append(edges, e)
+		}
+	}
+	g.Edges = edges
+	layout := map[string]Position{}
+	for id, p := range g.Layout {
+		if used[id] {
+			layout[id] = p
+		}
+	}
+	g.Layout = layout
+}
+
+// Resolve returns the orchestration with its agents taken from the library.
+// Agents missing from the library are left out, so validation reports the
+// edges that still point at them.
+func (g Graph) Resolve(library map[string]Agent) Orchestration {
+	o := Orchestration{RootAgent: g.RootAgent, Edges: g.Edges, Guardrails: g.Guardrails, Layout: g.Layout}
+	for _, id := range g.Agents {
+		if a, ok := library[id]; ok {
+			a.ID = id
+			o.Agents = append(o.Agents, a)
+		}
+	}
+	o.Normalize()
+	return o
+}
+
+// Graph returns the stored form of the orchestration.
+func (o Orchestration) Graph() Graph {
+	g := Graph{RootAgent: o.RootAgent, Edges: o.Edges, Guardrails: o.Guardrails, Layout: o.Layout}
+	for _, a := range o.Agents {
+		g.Agents = append(g.Agents, a.ID)
+	}
+	g.Normalize()
+	return g
+}
+
+// Normalize replaces nil slices so the JSON stays stable for clients.
+func (a *Agent) Normalize() {
+	if a.Skills == nil {
+		a.Skills = []string{}
+	}
+	if a.Tools == nil {
+		a.Tools = []ToolRef{}
+	}
+	if a.Guardrails == nil {
+		a.Guardrails = []AssetRef{}
 	}
 }
 
@@ -158,19 +232,18 @@ func RuntimeName(a Agent) string {
 	return name
 }
 
-// NewStarter returns the draft spec for a new orchestration: one root agent.
-func NewStarter(agentID string) Orchestration {
-	o := Orchestration{
-		RootAgent: agentID,
-		Agents: []Agent{{
-			ID:           agentID,
-			Name:         "Assistant",
-			Description:  "Main entry point. Answers questions and routes to specialists.",
-			Instructions: "You are a helpful assistant. Answer briefly and clearly.",
-			Model:        AssetRef{Asset: DefaultLLM, Config: json.RawMessage(`{}`)},
-		}},
-		Layout: map[string]Position{agentID: {X: 0, Y: 0}},
+// NewStarter returns a new orchestration's graph and its one root agent, which
+// is added to the library.
+func NewStarter(agentID string) (Graph, Agent) {
+	a := Agent{
+		ID:           agentID,
+		Name:         "Assistant",
+		Description:  "Main entry point. Answers questions and routes to specialists.",
+		Instructions: "You are a helpful assistant. Answer briefly and clearly.",
+		Model:        AssetRef{Asset: DefaultLLM, Config: json.RawMessage(`{}`)},
 	}
-	o.Normalize()
-	return o
+	a.Normalize()
+	g := Graph{RootAgent: agentID, Agents: []string{agentID}, Layout: map[string]Position{agentID: {X: 0, Y: 0}}}
+	g.Normalize()
+	return g, a
 }

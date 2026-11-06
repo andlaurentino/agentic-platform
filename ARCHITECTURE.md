@@ -82,9 +82,9 @@ agentic-platform/
 | **Asset manifest** | `lib-agent-assets` | Metadata (id, kind, domain, owner, description, icon, tags, lifecycle) plus a **JSON Schema** for its config. The UI renders config forms from this schema. |
 | **Asset instance** | `ms-ai-platform` | A reference to an asset plus the config values a builder entered (e.g. guardrail `core.guardrail.pii-redact` with `{ "entities": ["email","cpf"] }`). |
 | **Skill** | `ms-ai-platform` | A reusable, versioned package of instructions (Markdown) plus optional required tools. Builders write skills in the UI and attach them to agents. |
-| **Agent** | `ms-ai-platform` | Instructions + LLM instance + skills + tools/MCP tools + guardrails + the sub-agents it may delegate to. |
-| **Orchestration** | `ms-ai-platform` | A *Conversation Orchestration*: a graph of agents with one root agent. This is the unit that gets edited, released, and served to a channel. |
-| **Draft** | `ms-ai-platform` | The single shared working copy of an orchestration (the trunk head). Edits autosave here. |
+| **Agent** | `ms-ai-platform` | Instructions + LLM instance + skills + tools/MCP tools + guardrails. Agents live in a shared **agent library**, not inside one orchestration: the same agent can be used by many orchestrations, and editing it (on its own page or on any canvas) changes it everywhere. Each agent has its own version for optimistic concurrency. |
+| **Orchestration** | `ms-ai-platform` | A *Conversation Orchestration*: a graph of library agents with one root agent, and the edges that say who delegates to whom. This is the unit that gets edited, released, and served to a channel. |
+| **Draft** | `ms-ai-platform` | The single shared working copy of an orchestration's graph (the trunk head): which agents it uses, the root, edges, orchestration guardrails and layout. Edits autosave here; agent edits save to the library. |
 | **Revision** | `ms-ai-platform` | An immutable snapshot of the full orchestration spec, created when the draft is published. Revisions form a linear history. |
 | **Release** | `ms-ai-platform` | A revision promoted to an environment (`dev` → `staging` → `prod`). |
 | **Session (thread)** | `ms-ai-platform` | One conversation with a released orchestration or with the draft (playground). Maps to an AG-UI `threadId`. Stores events and state. |
@@ -410,8 +410,9 @@ REST covers resources and configuration. Agent runs go through the AG-UI endpoin
 | Catalog | `GET /v1/catalog?kind=&domain=` · `GET /v1/catalog/{assetId}` (manifest + config schema) |
 | MCP | `GET /v1/mcps/{assetId}/tools` (discovered tools, filtered by the allow-list) |
 | Skills | `GET/POST /v1/skills` · `GET/PUT /v1/skills/{id}` · `GET /v1/skills/{id}/versions` |
+| Agents | `GET/POST /v1/agents` · `GET/PUT/DELETE /v1/agents/{id}` (`PUT` with `If-Match`; `DELETE` is refused while orchestrations use the agent) · `POST /v1/agents/validate` |
 | Orchestrations | `GET/POST /v1/orchestrations` · `GET/DELETE /v1/orchestrations/{id}` |
-| Draft | `GET /v1/orchestrations/{id}/draft` · `PUT .../draft` (with `If-Match`) · `POST .../draft/validate` |
+| Draft | `GET /v1/orchestrations/{id}/draft` (the graph plus the library agents it uses) · `PUT .../draft` (the graph, with `If-Match`) · `POST .../draft/validate` |
 | Revisions | `POST .../revisions` (publish draft) · `GET .../revisions` · `GET .../revisions/{rev}` · `GET .../compare?base=&head=` · `POST .../revisions/{rev}/restore` |
 | Releases | `GET/POST /v1/orchestrations/{id}/releases` · `POST .../releases/{env}/rollback` |
 | Runtime | `POST .../agui` (AG-UI, SSE) · `GET .../sessions` · `GET .../sessions/{sid}/events` |
@@ -424,6 +425,7 @@ The OpenAPI spec generates both the Go server stubs and the TypeScript client us
 ```mermaid
 erDiagram
     orchestration ||--|| draft : "has one"
+    draft }o--o{ agent : "uses (spec.agents ids)"
     orchestration ||--o{ revision : has
     revision }o--o| revision : "parent"
     orchestration ||--o{ release : has
@@ -439,7 +441,8 @@ erDiagram
 |---|---|
 | `catalog_asset` | `id`, `kind`, `domain`, `manifest jsonb`, `config_schema jsonb`, `lifecycle`, `module_version`, `synced_at` |
 | `orchestration` | `id`, `name`, `description`, `created_at` |
-| `draft` | `orchestration_id` (PK), `spec jsonb`, `version int`, `based_on_revision_id`, `updated_at`, `updated_by_name` |
+| `agent` | `id`, `spec jsonb` (name, instructions, model, skills, tools, guardrails), `version int`, `created_at`, `updated_at`, `updated_by_name` |
+| `draft` | `orchestration_id` (PK), `spec jsonb` (the graph; `agents` holds library agent ids), `version int`, `based_on_revision_id`, `updated_at`, `updated_by_name` |
 | `revision` | `id`, `orchestration_id`, `number int`, `parent_ids uuid[]` (one item in v1), `spec jsonb`, `spec_hash`, `author_name`, `message`, `created_at` |
 | `release` | `orchestration_id`, `environment`, `revision_id`, `released_at`, `previous_revision_id` |
 | `session` | `id` (= AG-UI `threadId`), `orchestration_id`, `target` (`draft` / `release`), `environment`, `revision_id`, `state jsonb` |
@@ -482,8 +485,8 @@ The visual builder that builders use.
 ```
 
 - **Left sidebar (collapsible to icons):** Orchestrations, Agents, Skills, Tools, MCPs, Guardrails, LLMs, History, Releases, Evals. The Tools, MCPs, Guardrails, and LLMs sections show the **asset catalog** as read-only cards: description, owner, lifecycle badge, config schema, and which agents use the asset.
-- **Canvas:** agents are nodes. Edges are delegation (`sub-agent` or `agent-as-tool`). Tools, MCPs, and guardrails can be dragged from the sidebar onto an agent node.
-- **Inspector:** forms for the selected agent: instructions editor, model picker, skills, tools (MCP tools selected per server), guardrails. Asset config forms are **generated from the asset's JSON Schema**, so new assets show up in the UI with no frontend changes.
+- **Canvas:** agents are nodes. Edges are delegation (`sub-agent` or `agent-as-tool`). Right-click the canvas to add a new agent or an existing one from the library at the cursor; right-click an agent to edit it, open its page, make it root or remove it from the orchestration (it stays in the library); right-click an edge to switch its mode or remove it. Tools, MCPs, and guardrails can be dragged from the sidebar onto an agent node.
+- **Inspector:** forms for the selected agent (instructions editor, model picker, skills, tools with MCP tools selected per server, guardrails) or the selected connection (mode, remove). Asset config forms are **generated from the asset's JSON Schema**, so new assets show up in the UI with no frontend changes. The same agent form is used on the agent's own page (`/agents/{id}`), which also shows the orchestrations that use it.
 - **Top bar:** draft save status and version, validation errors, and a **Publish** button (asks for a message and author name). On a `409 Conflict`, it shows a "draft changed by someone else" banner with a diff and a reload/reapply action.
 - **History:** linear list of revisions, a diff between any two, and "restore into draft".
 - **Playground:** an AG-UI client (`HttpAgent`) pointed at `.../agui?target=draft`. It renders events as they arrive:

@@ -28,9 +28,11 @@ import (
 
 var update = flag.Bool("update", false, "rewrite testdata/run.sse")
 
-type fakeSource struct{ draft store.Draft }
+type fakeSource struct{ orch spec.Orchestration }
 
-func (f fakeSource) GetDraft(context.Context, string) (store.Draft, error) { return f.draft, nil }
+func (f fakeSource) ResolveDraft(context.Context, string) (spec.Orchestration, error) {
+	return f.orch, nil
+}
 func (f fakeSource) ListSkills(context.Context) ([]store.Skill, error) {
 	return []store.Skill{{ID: "skl_tone", Name: "Friendly tone", Content: "Always be friendly. Use {braces} freely."}}, nil
 }
@@ -84,7 +86,7 @@ func newHandler(gw *gatewaytest.Server, o spec.Orchestration) *Handler {
 
 func newHandlerWith(reg *registry.Registry, o spec.Orchestration) *Handler {
 	return &Handler{
-		Source:   fakeSource{draft: store.Draft{Spec: o, Version: 1}},
+		Source:   fakeSource{orch: o},
 		Compiler: &compiler.Compiler{Catalog: catalog.New(reg, secrets.Env{}), Validator: spec.NewValidator(reg)},
 		Sessions: session.InMemoryService(),
 	}

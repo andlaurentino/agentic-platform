@@ -5,16 +5,19 @@ import {
   Panel,
   ReactFlow,
   applyNodeChanges,
+  useReactFlow,
   type Connection,
   type Edge as FlowEdge,
   type NodeChange,
 } from "@xyflow/react"
-import { Plus } from "lucide-react"
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { ChevronDown, Plus } from "lucide-react"
+import { useCallback, useEffect, useMemo, useState, type MouseEvent } from "react"
 import type { EdgeMode } from "@/api/types"
 import { Button } from "@/components/ui/button"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { AgentNode, type AgentNodeType } from "./agent-node"
-import { newAgent } from "./spec-utils"
+import { AddAgentItems, CanvasMenu, type MenuState, type MenuTarget } from "./canvas-menu"
+import { removeAgent, removeEdge } from "./spec-utils"
 import { useEditor } from "./store"
 
 const nodeTypes = { agent: AgentNode }
@@ -31,6 +34,13 @@ export function Canvas() {
   const activeAgentId = useEditor((s) => s.activeAgentId)
   const problems = useEditor((s) => s.problems)
   const { edit, select } = useEditor.getState()
+  const { screenToFlowPosition } = useReactFlow()
+  const [menu, setMenu] = useState<MenuState>({ open: false, x: 0, y: 0, target: { kind: "pane", at: { x: 0, y: 0 } } })
+
+  const openMenu = (e: MouseEvent | globalThis.MouseEvent, target: MenuTarget) => {
+    e.preventDefault()
+    setMenu({ open: true, x: e.clientX, y: e.clientY, target })
+  }
 
   const errorsByAgent = useMemo(() => {
     const m = new Map<string, number>()
@@ -71,11 +81,12 @@ export function Canvas() {
         target: e.to,
         label: edgeLabel[e.mode],
         animated: e.from === activeAgentId || e.to === activeAgentId,
+        selected: selection.kind === "edge" && selection.from === e.from && selection.to === e.to,
         markerEnd: { type: MarkerType.ArrowClosed },
         style: e.mode === "tool" ? { strokeDasharray: "6 4" } : undefined,
         data: { mode: e.mode },
       })),
-    [spec.edges, activeAgentId],
+    [spec.edges, activeAgentId, selection],
   )
 
   const onNodesChange = useCallback(
@@ -102,64 +113,68 @@ export function Canvas() {
     [edit],
   )
 
-  const addAgent = () => {
-    const a = newAgent(spec)
-    const maxY = Math.max(0, ...Object.values(spec.layout).map((p) => p.y))
-    edit((s) => {
-      s.agents.push(a)
-      s.layout[a.id] = { x: 0, y: maxY + 200 }
-    })
-    select({ kind: "agent", id: a.id })
-  }
+  // The toolbar adds agents below the lowest one.
+  const belowLast = () => ({ x: 0, y: Math.max(-200, ...Object.values(spec.layout).map((p) => p.y)) + 200 })
 
   return (
-    <ReactFlow
-      nodes={nodes}
-      edges={edges}
-      nodeTypes={nodeTypes}
-      onNodesChange={onNodesChange}
-      onNodeDragStop={(_, node) =>
-        edit((s) => {
-          s.layout[node.id] = { x: Math.round(node.position.x), y: Math.round(node.position.y) }
-        })
-      }
-      onConnect={onConnect}
-      isValidConnection={isValidConnection}
-      onEdgeClick={(_, edge) =>
-        edit((s) => {
-          const e = s.edges.find((x) => `${x.from}->${x.to}` === edge.id)
-          if (e) e.mode = e.mode === "transfer" ? "tool" : "transfer"
-        })
-      }
-      onNodesDelete={(deleted) =>
-        edit((s) => {
-          const ids = new Set(deleted.map((n) => n.id).filter((id) => id !== s.rootAgent))
-          s.agents = s.agents.filter((a) => !ids.has(a.id))
-          s.edges = s.edges.filter((e) => !ids.has(e.from) && !ids.has(e.to))
-          for (const id of ids) delete s.layout[id]
-        })
-      }
-      onEdgesDelete={(deleted) =>
-        edit((s) => {
-          const ids = new Set(deleted.map((e) => e.id))
-          s.edges = s.edges.filter((e) => !ids.has(`${e.from}->${e.to}`))
-        })
-      }
-      onPaneClick={() => select({ kind: "orchestration" })}
-      fitView
-      fitViewOptions={{ maxZoom: 1 }}
-      proOptions={{ hideAttribution: true }}
-    >
-      <Background gap={20} />
-      <Controls showInteractive={false} />
-      <Panel position="top-left" className="flex items-center gap-2">
-        <Button size="sm" onClick={addAgent}>
-          <Plus /> Add agent
-        </Button>
-        <p className="hidden rounded-md bg-background/80 px-2 py-1 text-xs text-muted-foreground backdrop-blur md:block">
-          Drag from an agent's bottom handle to another agent to delegate. Click an arrow to switch between hand-off and call-as-tool.
-        </p>
-      </Panel>
-    </ReactFlow>
+    <>
+      <ReactFlow
+        nodes={nodes}
+        edges={edges}
+        nodeTypes={nodeTypes}
+        onNodesChange={onNodesChange}
+        onNodeDragStop={(_, node) =>
+          edit((s) => {
+            s.layout[node.id] = { x: Math.round(node.position.x), y: Math.round(node.position.y) }
+          })
+        }
+        onConnect={onConnect}
+        isValidConnection={isValidConnection}
+        onEdgeClick={(_, edge) => select({ kind: "edge", from: edge.source, to: edge.target })}
+        // Deleting takes agents off this canvas; they stay in the agent library.
+        onNodesDelete={(deleted) =>
+          edit((s) => {
+            for (const n of deleted) removeAgent(s, n.id)
+          })
+        }
+        onEdgesDelete={(deleted) =>
+          edit((s) => {
+            for (const e of deleted) removeEdge(s, e.source, e.target)
+          })
+        }
+        onPaneClick={() => select({ kind: "orchestration" })}
+        onPaneContextMenu={(e) => openMenu(e, { kind: "pane", at: screenToFlowPosition({ x: e.clientX, y: e.clientY }) })}
+        onNodeContextMenu={(e, node) => {
+          select({ kind: "agent", id: node.id })
+          openMenu(e, { kind: "agent", id: node.id })
+        }}
+        onEdgeContextMenu={(e, edge) => {
+          select({ kind: "edge", from: edge.source, to: edge.target })
+          openMenu(e, { kind: "edge", from: edge.source, to: edge.target })
+        }}
+        fitView
+        fitViewOptions={{ maxZoom: 1 }}
+        proOptions={{ hideAttribution: true }}
+      >
+        <Background gap={20} />
+        <Controls showInteractive={false} />
+        <Panel position="top-left" className="flex items-center gap-2">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button size="sm">
+                <Plus /> Add agent <ChevronDown />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent className="w-56">
+              <AddAgentItems at={belowLast} />
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <p className="hidden rounded-md bg-background/80 px-2 py-1 text-xs text-muted-foreground backdrop-blur md:block">
+            Right-click the canvas, an agent or an arrow for options. Drag from an agent's bottom handle to another agent to delegate.
+          </p>
+        </Panel>
+      </ReactFlow>
+      <CanvasMenu menu={menu} onOpenChange={(open) => setMenu((m) => ({ ...m, open }))} />
+    </>
   )
 }

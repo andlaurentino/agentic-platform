@@ -35,7 +35,7 @@ make up                     # Postgres + every service, with live reload → htt
 - Run only some services: `go run ./tools/devrun api web`. Ports already in use are reported before anything starts.
 - `.env` is loaded for every service. Each service can still be run alone with `make dev-gateway`, `dev-mcp`, `dev-api`, `dev-web`.
 
-Then: **Orchestrations → New orchestration**, add agents on the canvas, drag from an agent's bottom handle to another agent to delegate, pick tools/MCP tools/guardrails/skills in the **Agent** tab, set guardrails for every agent in **Settings**, and chat in **Test**.
+Then: **Orchestrations → New orchestration**, right-click the canvas to add a new agent or an existing one from the agent library, drag from an agent's bottom handle to another agent to delegate (click an arrow to edit the connection, right-click it or an agent for more options), pick tools/MCP tools/guardrails/skills in the **Agent** tab, set guardrails for every agent in **Settings**, and chat in **Test**. Agents are shared: the **Agents** page lists the library, and editing an agent changes it in every orchestration that uses it.
 
 Try the AG-UI endpoint without the UI:
 
@@ -150,7 +150,7 @@ Notable tests:
 
 ## Slice 0 scope
 
-In: `ms-llm-gateway` (Anthropic and OpenAI-compatible upstreams, model discovery) and one or more gateways registered in the platform; one shared draft per orchestration with `If-Match`/409; `llm` agents with hand-off (sub-agent) and call-as-tool edges; AG-UI events `RUN_*`, `STEP_*`, `TEXT_MESSAGE_*`, `TOOL_CALL_*`, `CUSTOM guardrail.decision` / `message.final`.
+In: `ms-llm-gateway` (Anthropic and OpenAI-compatible upstreams, model discovery) and one or more gateways registered in the platform; a shared agent library (agents reused across orchestrations, each with its own version) and one shared draft per orchestration, both with `If-Match`/409; `llm` agents with hand-off (sub-agent) and call-as-tool edges; AG-UI events `RUN_*`, `STEP_*`, `TEXT_MESSAGE_*`, `TOOL_CALL_*`, `CUSTOM guardrail.decision` / `message.final`.
 
 Not yet: authentication (run it on the internal network only), publish/revisions/releases, workflow agents (sequential/parallel/loop), human-in-the-loop confirmations, persistent sessions (chat history lives in API memory and is lost on restart), traces, OpenAPI-generated clients, drag-and-drop from the sidebar onto nodes.
 

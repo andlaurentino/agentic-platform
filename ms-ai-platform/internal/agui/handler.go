@@ -22,7 +22,7 @@ import (
 
 // Source loads what a run needs.
 type Source interface {
-	GetDraft(ctx context.Context, orchestrationID string) (store.Draft, error)
+	ResolveDraft(ctx context.Context, orchestrationID string) (spec.Orchestration, error)
 	ListSkills(ctx context.Context) ([]store.Skill, error)
 }
 
@@ -64,7 +64,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	draft, err := h.Source.GetDraft(ctx, orchID)
+	orch, err := h.Source.ResolveDraft(ctx, orchID)
 	if errors.Is(err, store.ErrNotFound) {
 		httpx.WriteError(w, http.StatusNotFound, "not_found", "orchestration not found", nil)
 		return
@@ -105,7 +105,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	decisions := &decisionBuffer{}
-	compiled, err := h.Compiler.Compile(ctx, draft.Spec, skills, guardrails.NewRun(decisions.add))
+	compiled, err := h.Compiler.Compile(ctx, orch, skills, guardrails.NewRun(decisions.add))
 	if err != nil {
 		code := "compile_failed"
 		var ve *compiler.ValidationError

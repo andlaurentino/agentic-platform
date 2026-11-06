@@ -1,6 +1,7 @@
 import { Outlet, createRootRoute, createRoute, createRouter, redirect } from "@tanstack/react-router"
 import { AppSidebar } from "@/components/app-sidebar"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
+import { AgentEditorPage } from "@/routes/agent-editor"
 import { AgentsPage } from "@/routes/agents"
 import { CatalogPage } from "@/routes/catalog"
 import { OrchestrationEditorPage } from "@/routes/orchestration-editor"
@@ -39,6 +40,7 @@ export const orchestrationEditorRoute = createRoute({
 })
 
 const agentsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/agents", component: AgentsPage })
+const agentRoute = createRoute({ getParentRoute: () => rootRoute, path: "/agents/$id", component: AgentEditorPage })
 const skillsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/skills", component: SkillsPage })
 const skillRoute = createRoute({ getParentRoute: () => rootRoute, path: "/skills/$id", component: SkillEditorPage })
 const catalogRoute = createRoute({ getParentRoute: () => rootRoute, path: "/catalog/$kind", component: CatalogPage })
@@ -49,6 +51,7 @@ export const router = createRouter({
     orchestrationsRoute,
     orchestrationEditorRoute,
     agentsRoute,
+    agentRoute,
     skillsRoute,
     skillRoute,
     catalogRoute,

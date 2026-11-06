@@ -66,9 +66,10 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusUnprocessableEntity, "invalid", "name is required", map[string]string{"field": "name"})
 		return
 	}
+	graph, starter := spec.NewStarter(httpx.NewID("agt"))
 	o, err := h.Store.CreateOrchestration(r.Context(),
 		store.Orchestration{ID: httpx.NewID("orc"), Name: strings.TrimSpace(in.Name), Description: in.Description},
-		spec.NewStarter(httpx.NewID("agt")))
+		graph, starter)
 	if err != nil {
 		writeStoreError(w, err)
 		return
@@ -100,8 +101,9 @@ func (h *Handler) getDraft(w http.ResponseWriter, r *http.Request) {
 	writeDraft(w, http.StatusOK, d)
 }
 
-// putDraft saves the draft with optimistic concurrency: the client must send the
-// version it edited in If-Match. A stale version gets 409 with the current draft.
+// putDraft saves the draft's graph with optimistic concurrency: the client must
+// send the version it edited in If-Match. A stale version gets 409 with the
+// current draft. Agents are saved through /v1/agents.
 func (h *Handler) putDraft(w http.ResponseWriter, r *http.Request) {
 	match := strings.Trim(strings.TrimPrefix(r.Header.Get("If-Match"), "W/"), `"`)
 	if match == "" {
@@ -114,14 +116,17 @@ func (h *Handler) putDraft(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Spec          spec.Orchestration `json:"spec"`
-		UpdatedByName string             `json:"updatedByName"`
+		Spec          spec.Graph `json:"spec"`
+		UpdatedByName string     `json:"updatedByName"`
 	}
 	if !httpx.DecodeJSON(w, r, &in) {
 		return
 	}
-	in.Spec.Normalize()
 	d, err := h.Store.SaveDraft(r.Context(), r.PathValue("id"), version, in.Spec, in.UpdatedByName)
+	if errors.Is(err, store.ErrUnknownAgent) {
+		httpx.WriteError(w, http.StatusUnprocessableEntity, "unknown_agent", err.Error(), nil)
+		return
+	}
 	if errors.Is(err, store.ErrVersionConflict) {
 		w.Header().Set("ETag", etag(d.Version))
 		httpx.WriteJSON(w, http.StatusConflict, map[string]any{
@@ -144,7 +149,8 @@ func nameOr(name string) string {
 	return name
 }
 
-// validate checks the spec in the body, or the stored draft when the body is empty.
+// validate checks the spec in the body (agents included), or the stored draft
+// when the body is empty.
 func (h *Handler) validate(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Spec *spec.Orchestration `json:"spec"`
@@ -154,24 +160,20 @@ func (h *Handler) validate(w http.ResponseWriter, r *http.Request) {
 	}
 	o := in.Spec
 	if o == nil {
-		d, err := h.Store.GetDraft(r.Context(), r.PathValue("id"))
+		resolved, err := h.Store.ResolveDraft(r.Context(), r.PathValue("id"))
 		if err != nil {
 			writeStoreError(w, err)
 			return
 		}
-		o = &d.Spec
+		o = &resolved
 	}
 	o.Normalize()
-	skills, err := h.Store.ListSkills(r.Context())
+	knownSkill, err := h.Store.KnownSkills(r.Context())
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	ids := map[string]bool{}
-	for _, s := range skills {
-		ids[s.ID] = true
-	}
-	problems := h.Validator.Validate(o, func(id string) bool { return ids[id] })
+	problems := h.Validator.Validate(o, knownSkill)
 	if problems == nil {
 		problems = []spec.Problem{}
 	}
